@@ -1,0 +1,7 @@
+node_modules/
+storage/
+.env
+.env.local
+downloads/
+downloads_payout/
+*.log

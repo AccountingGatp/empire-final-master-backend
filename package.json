@@ -1,0 +1,27 @@
+{
+  "name": "empire",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js",
+    "test": "node --test test/*.test.js"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "module",
+  "dependencies": {
+    "@aws-sdk/client-s3": "^3.1079.0",
+    "@aws-sdk/s3-request-presigner": "^3.1079.0",
+    "cors": "^2.8.6",
+    "dotenv": "^17.4.2",
+    "exceljs": "^4.4.0",
+    "express": "^5.2.1",
+    "google-auth-library": "^10.9.0",
+    "jsonwebtoken": "^9.0.3",
+    "jszip": "^3.10.1",
+    "mongoose": "^9.7.3",
+    "xlsx": "^0.18.5"
+  }
+}
