@@ -10,10 +10,6 @@ import authRouter from './src/routes/auth.js';
 
 import { requireAuth } from './src/middleware/auth.js';
 
-// ==================================================
-// MongoDB connection
-// ==================================================
-
 let dbPromise;
 
 function connectOnce() {
@@ -27,49 +23,24 @@ function connectOnce() {
   return dbPromise;
 }
 
-// ==================================================
-// Express application
-// ==================================================
-
 export function createApp() {
   const app = express();
 
-  // ==================================================
   // CORS
-  // ==================================================
-  //
-  // Keep this simple.
-  // This is the same approach used by the old
-  // working developer version.
-  //
-
   app.use(cors());
 
-  // ==================================================
-  // JSON BODY
-  // ==================================================
-
+  // JSON body
   app.use(express.json({ limit: '10mb' }));
 
-  // ==================================================
-  // HEALTH CHECK
-  // ==================================================
-
+  // Health check
   app.get('/api/health', (_req, res) => {
     res.json({
       ok: true,
-      version: 'working-cors-1',
+      version: 'express-zero-config-1',
     });
   });
 
-  // ==================================================
-  // DATABASE
-  // ==================================================
-  //
-  // Health endpoint above does NOT require MongoDB.
-  // All routes below will wait for MongoDB.
-  //
-
+  // Database connection
   app.use(async (_req, res, next) => {
     try {
       await connectOnce();
@@ -84,30 +55,13 @@ export function createApp() {
     }
   });
 
-  // ==================================================
-  // GOOGLE AUTH
-  // ==================================================
-  //
-  // IMPORTANT:
-  // This route is PUBLIC.
-  // Google login does not have a JWT yet.
-  //
-
+  // PUBLIC Google authentication
   app.use('/api/auth', authRouter);
 
-  // ==================================================
-  // PROTECTED API
-  // ==================================================
-  //
-  // Everything else under /api requires login.
-  //
-
+  // PROTECTED application routes
   app.use('/api', requireAuth, runsRouter);
 
-  // ==================================================
-  // ERROR HANDLER
-  // ==================================================
-
+  // Error handler
   app.use((err, _req, res, _next) => {
     console.error('[error]', err);
 
@@ -119,19 +73,11 @@ export function createApp() {
   return app;
 }
 
-// ==================================================
-// Create Express app
-// ==================================================
-
 const app = createApp();
 
-// Vercel/serverless uses this export
 export default app;
 
-// ==================================================
-// Local development
-// ==================================================
-
+// Local development only
 const isMain =
   process.argv[1] &&
   fileURLToPath(import.meta.url) === process.argv[1];
