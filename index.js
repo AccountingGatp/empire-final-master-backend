@@ -20,10 +20,20 @@ function connectOnce() {
   return dbPromise;
 }
 
-// Build the Express app.
-export function createApp() {
-  const app = express();
-  app.use(cors()); // allow all origins
+  // Build the Express app.
+  export function createApp() {
+    const app = express();
+    const allowedOrigins = [
+    'http://localhost:3000',
+    'https://empire-final-master-frontend.vercel.app',
+  ];
+  
+  app.use(
+    cors({
+      origin: allowedOrigins,
+      credentials: true,
+    })
+  );
   app.use(express.json());
 
   // Liveness check — no DB required.
