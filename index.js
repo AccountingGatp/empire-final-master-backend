@@ -38,8 +38,8 @@ export function createApp() {
   app.use(
     cors({
       origin: function (origin, callback) {
-        // Allow requests without an Origin header
-        // (curl, Postman, server-to-server, etc.)
+        // Allow requests such as curl/Postman/server-to-server
+        // where there is no Origin header.
         if (!origin) {
           return callback(null, true);
         }
@@ -73,9 +73,6 @@ export function createApp() {
     })
   );
 
-  // Handle preflight requests
-  app.options('*', cors());
-
   // --------------------------------------------------
   // BODY PARSER
   // --------------------------------------------------
@@ -89,7 +86,7 @@ export function createApp() {
   app.get('/api/health', (_req, res) => {
     res.json({
       ok: true,
-      version: 'cors-debug-1',
+      version: 'cors-debug-2',
       authRoute: '/api/auth/google',
     });
   });
@@ -97,8 +94,6 @@ export function createApp() {
   // --------------------------------------------------
   // TEMPORARY DEBUG ROUTE
   // --------------------------------------------------
-  // This confirms that Vercel is actually running
-  // this version of index.js.
 
   app.post('/api/debug-google', (req, res) => {
     console.log('[debug-google] request received');
@@ -132,9 +127,9 @@ export function createApp() {
   // --------------------------------------------------
   // GOOGLE AUTH
   // --------------------------------------------------
+
   // IMPORTANT:
-  // This route is PUBLIC.
-  // Do NOT put requireAuth before this router.
+  // This must remain BEFORE the protected /api routes.
 
   app.use('/api/auth', authRouter);
 
