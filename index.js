@@ -26,9 +26,9 @@ function connectOnce() {
 export function createApp() {
   const app = express();
 
-  // --------------------------------------------------
+  // ==================================================
   // CORS
-  // --------------------------------------------------
+  // ==================================================
 
   const allowedOrigins = [
     'http://localhost:3000',
@@ -37,26 +37,8 @@ export function createApp() {
 
   app.use(
     cors({
-      origin: function (origin, callback) {
-        // Allow requests such as curl/Postman/server-to-server
-        // where there is no Origin header.
-        if (!origin) {
-          return callback(null, true);
-        }
-
-        if (allowedOrigins.includes(origin)) {
-          return callback(null, true);
-        }
-
-        console.log('[cors] blocked origin:', origin);
-
-        return callback(
-          new Error(`CORS blocked for origin: ${origin}`)
-        );
-      },
-
+      origin: allowedOrigins,
       credentials: true,
-
       methods: [
         'GET',
         'POST',
@@ -65,7 +47,6 @@ export function createApp() {
         'DELETE',
         'OPTIONS',
       ],
-
       allowedHeaders: [
         'Content-Type',
         'Authorization',
@@ -73,27 +54,27 @@ export function createApp() {
     })
   );
 
-  // --------------------------------------------------
+  // ==================================================
   // BODY PARSER
-  // --------------------------------------------------
+  // ==================================================
 
   app.use(express.json({ limit: '10mb' }));
 
-  // --------------------------------------------------
+  // ==================================================
   // HEALTH CHECK
-  // --------------------------------------------------
+  // ==================================================
 
   app.get('/api/health', (_req, res) => {
     res.json({
       ok: true,
-      version: 'cors-debug-2',
+      version: 'cors-debug-3',
       authRoute: '/api/auth/google',
     });
   });
 
-  // --------------------------------------------------
+  // ==================================================
   // TEMPORARY DEBUG ROUTE
-  // --------------------------------------------------
+  // ==================================================
 
   app.post('/api/debug-google', (req, res) => {
     console.log('[debug-google] request received');
@@ -106,9 +87,9 @@ export function createApp() {
     });
   });
 
-  // --------------------------------------------------
+  // ==================================================
   // DATABASE CONNECTION
-  // --------------------------------------------------
+  // ==================================================
 
   app.use(async (_req, res, next) => {
     try {
@@ -124,24 +105,26 @@ export function createApp() {
     }
   });
 
-  // --------------------------------------------------
+  // ==================================================
   // GOOGLE AUTH
-  // --------------------------------------------------
-
+  // ==================================================
+  //
   // IMPORTANT:
-  // This must remain BEFORE the protected /api routes.
+  // This route is PUBLIC.
+  // It must come BEFORE the protected /api routes.
+  //
 
   app.use('/api/auth', authRouter);
 
-  // --------------------------------------------------
+  // ==================================================
   // PROTECTED API ROUTES
-  // --------------------------------------------------
+  // ==================================================
 
   app.use('/api', requireAuth, runsRouter);
 
-  // --------------------------------------------------
+  // ==================================================
   // ERROR HANDLER
-  // --------------------------------------------------
+  // ==================================================
 
   app.use((err, _req, res, _next) => {
     console.error('[error]', err);
@@ -154,17 +137,17 @@ export function createApp() {
   return app;
 }
 
-// --------------------------------------------------
+// ==================================================
 // CREATE APP
-// --------------------------------------------------
+// ==================================================
 
 const app = createApp();
 
 export default app;
 
-// --------------------------------------------------
+// ==================================================
 // LOCAL DEVELOPMENT SERVER
-// --------------------------------------------------
+// ==================================================
 
 const isMain =
   process.argv[1] &&
