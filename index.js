@@ -1,15 +1,17 @@
 import { fileURLToPath } from 'url';
 import express from 'express';
 import cors from 'cors';
+
 import config from './src/config.js';
 import { connectDB } from './src/db.js';
+
 import runsRouter from './src/routes/runs.js';
 import authRouter from './src/routes/auth.js';
+
 import { requireAuth } from './src/middleware/auth.js';
 
-// Connect to Mongo once, cached across warm serverless invocations. Clear the
-// cache on failure so the next request can retry (don't poison it).
 let dbPromise;
+
 function connectOnce() {
   if (!dbPromise) {
     dbPromise = connectDB().catch((err) => {
@@ -17,66 +19,169 @@ function connectOnce() {
       throw err;
     });
   }
+
   return dbPromise;
 }
 
-  // Build the Express app.
-  export function createApp() {
-    const app = express();
-    const allowedOrigins = [
+export function createApp() {
+  const app = express();
+
+  // --------------------------------------------------
+  // CORS
+  // --------------------------------------------------
+
+  const allowedOrigins = [
     'http://localhost:3000',
     'https://empire-final-master-frontend.vercel.app',
   ];
-  
+
   app.use(
     cors({
-      origin: allowedOrigins,
+      origin: function (origin, callback) {
+        // Allow requests without an Origin header
+        // (curl, Postman, server-to-server, etc.)
+        if (!origin) {
+          return callback(null, true);
+        }
+
+        if (allowedOrigins.includes(origin)) {
+          return callback(null, true);
+        }
+
+        console.log('[cors] blocked origin:', origin);
+
+        return callback(
+          new Error(`CORS blocked for origin: ${origin}`)
+        );
+      },
+
       credentials: true,
+
+      methods: [
+        'GET',
+        'POST',
+        'PUT',
+        'PATCH',
+        'DELETE',
+        'OPTIONS',
+      ],
+
+      allowedHeaders: [
+        'Content-Type',
+        'Authorization',
+      ],
     })
   );
-  app.use(express.json());
 
-  // Liveness check — no DB required.
-  // `version` lets you confirm which code Vercel is actually running.
-  app.get('/api/health', (_req, res) => res.json({ ok: true, version: 'sop-1.3 · b2-fix-2 · 2026-09-26' }));
+  // Handle preflight requests
+  app.options('*', cors());
 
-  // Ensure the DB is connected before handling data routes (serverless-friendly).
+  // --------------------------------------------------
+  // BODY PARSER
+  // --------------------------------------------------
+
+  app.use(express.json({ limit: '10mb' }));
+
+  // --------------------------------------------------
+  // HEALTH CHECK
+  // --------------------------------------------------
+
+  app.get('/api/health', (_req, res) => {
+    res.json({
+      ok: true,
+      version: 'cors-debug-1',
+      authRoute: '/api/auth/google',
+    });
+  });
+
+  // --------------------------------------------------
+  // TEMPORARY DEBUG ROUTE
+  // --------------------------------------------------
+  // This confirms that Vercel is actually running
+  // this version of index.js.
+
+  app.post('/api/debug-google', (req, res) => {
+    console.log('[debug-google] request received');
+    console.log('[debug-google] body:', req.body);
+
+    res.json({
+      ok: true,
+      message: 'This is the index.js currently running on Vercel',
+      bodyReceived: req.body,
+    });
+  });
+
+  // --------------------------------------------------
+  // DATABASE CONNECTION
+  // --------------------------------------------------
+
   app.use(async (_req, res, next) => {
     try {
       await connectOnce();
       next();
     } catch (err) {
       console.error('[db] not ready:', err);
-      res.status(500).json({ error: 'Backend not ready', detail: err.message });
+
+      res.status(500).json({
+        error: 'Backend not ready',
+        detail: err.message,
+      });
     }
   });
 
+  // --------------------------------------------------
+  // GOOGLE AUTH
+  // --------------------------------------------------
+  // IMPORTANT:
+  // This route is PUBLIC.
+  // Do NOT put requireAuth before this router.
+
   app.use('/api/auth', authRouter);
-  // Every run / file / journal endpoint needs a signed-in user.
+
+  // --------------------------------------------------
+  // PROTECTED API ROUTES
+  // --------------------------------------------------
+
   app.use('/api', requireAuth, runsRouter);
 
-  // Fallback error handler.
+  // --------------------------------------------------
+  // ERROR HANDLER
+  // --------------------------------------------------
+
   app.use((err, _req, res, _next) => {
     console.error('[error]', err);
-    res.status(500).json({ error: err.message || 'internal error' });
+
+    res.status(500).json({
+      error: err.message || 'internal error',
+    });
   });
 
   return app;
 }
 
+// --------------------------------------------------
+// CREATE APP
+// --------------------------------------------------
+
 const app = createApp();
 
-// Default export = the Express app instance (a valid serverless handler/server).
 export default app;
 
-// Only listen when run directly (`node index.js` / `npm start`); serverless
-// platforms import the default export and manage the port themselves.
-const isMain = process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1];
+// --------------------------------------------------
+// LOCAL DEVELOPMENT SERVER
+// --------------------------------------------------
+
+const isMain =
+  process.argv[1] &&
+  fileURLToPath(import.meta.url) === process.argv[1];
+
 if (isMain) {
   connectOnce()
     .then(() => {
       app.listen(config.port, () => {
-        console.log(`[server] listening on http://localhost:${config.port}`);
+        console.log(
+          `[server] listening on http://localhost:${config.port}`
+        );
       });
     })
     .catch((err) => {
