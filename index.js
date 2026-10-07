@@ -30,29 +30,53 @@ export function createApp() {
   // CORS
   // ==================================================
 
-  const allowedOrigins = [
+  const allowedOrigins = new Set([
     'http://localhost:3000',
     'https://empire-final-master-frontend.vercel.app',
-  ];
+  ]);
 
-  app.use(
-    cors({
-      origin: allowedOrigins,
-      credentials: true,
-      methods: [
-        'GET',
-        'POST',
-        'PUT',
-        'PATCH',
-        'DELETE',
-        'OPTIONS',
-      ],
-      allowedHeaders: [
-        'Content-Type',
-        'Authorization',
-      ],
-    })
-  );
+  const corsOptions = {
+    origin: (origin, callback) => {
+      // Requests such as Postman/curl/server-to-server
+      // may not contain an Origin header.
+      if (!origin) {
+        return callback(null, true);
+      }
+
+      if (allowedOrigins.has(origin)) {
+        return callback(null, true);
+      }
+
+      console.log('[CORS] Blocked origin:', origin);
+
+      return callback(new Error(`CORS blocked: ${origin}`));
+    },
+
+    credentials: true,
+
+    methods: [
+      'GET',
+      'POST',
+      'PUT',
+      'PATCH',
+      'DELETE',
+      'OPTIONS',
+    ],
+
+    allowedHeaders: [
+      'Content-Type',
+      'Authorization',
+    ],
+
+    optionsSuccessStatus: 204,
+  };
+
+  // Normal CORS middleware
+  app.use(cors(corsOptions));
+
+  // Explicit preflight handler for Google auth
+  // Exact route is used instead of "*" for Express compatibility.
+  app.options('/api/auth/google', cors(corsOptions));
 
   // ==================================================
   // BODY PARSER
@@ -67,7 +91,7 @@ export function createApp() {
   app.get('/api/health', (_req, res) => {
     res.json({
       ok: true,
-      version: 'cors-debug-3',
+      version: 'cors-debug-4',
       authRoute: '/api/auth/google',
     });
   });
@@ -108,11 +132,9 @@ export function createApp() {
   // ==================================================
   // GOOGLE AUTH
   // ==================================================
-  //
-  // IMPORTANT:
-  // This route is PUBLIC.
-  // It must come BEFORE the protected /api routes.
-  //
+
+  // PUBLIC ROUTE
+  // Do NOT put requireAuth before this.
 
   app.use('/api/auth', authRouter);
 
