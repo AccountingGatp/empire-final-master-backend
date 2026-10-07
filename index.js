@@ -10,6 +10,10 @@ import authRouter from './src/routes/auth.js';
 
 import { requireAuth } from './src/middleware/auth.js';
 
+// ==================================================
+// MongoDB connection
+// ==================================================
+
 let dbPromise;
 
 function connectOnce() {
@@ -23,63 +27,26 @@ function connectOnce() {
   return dbPromise;
 }
 
+// ==================================================
+// Express application
+// ==================================================
+
 export function createApp() {
   const app = express();
 
   // ==================================================
   // CORS
   // ==================================================
+  //
+  // Keep this simple.
+  // This is the same approach used by the old
+  // working developer version.
+  //
 
-  const allowedOrigins = new Set([
-    'http://localhost:3000',
-    'https://empire-final-master-frontend.vercel.app',
-  ]);
-
-  const corsOptions = {
-    origin: (origin, callback) => {
-      // Requests such as Postman/curl/server-to-server
-      // may not contain an Origin header.
-      if (!origin) {
-        return callback(null, true);
-      }
-
-      if (allowedOrigins.has(origin)) {
-        return callback(null, true);
-      }
-
-      console.log('[CORS] Blocked origin:', origin);
-
-      return callback(new Error(`CORS blocked: ${origin}`));
-    },
-
-    credentials: true,
-
-    methods: [
-      'GET',
-      'POST',
-      'PUT',
-      'PATCH',
-      'DELETE',
-      'OPTIONS',
-    ],
-
-    allowedHeaders: [
-      'Content-Type',
-      'Authorization',
-    ],
-
-    optionsSuccessStatus: 204,
-  };
-
-  // Normal CORS middleware
-  app.use(cors(corsOptions));
-
-  // Explicit preflight handler for Google auth
-  // Exact route is used instead of "*" for Express compatibility.
-  app.options('/api/auth/google', cors(corsOptions));
+  app.use(cors());
 
   // ==================================================
-  // BODY PARSER
+  // JSON BODY
   // ==================================================
 
   app.use(express.json({ limit: '10mb' }));
@@ -91,29 +58,17 @@ export function createApp() {
   app.get('/api/health', (_req, res) => {
     res.json({
       ok: true,
-      version: 'cors-debug-4',
-      authRoute: '/api/auth/google',
+      version: 'working-cors-1',
     });
   });
 
   // ==================================================
-  // TEMPORARY DEBUG ROUTE
+  // DATABASE
   // ==================================================
-
-  app.post('/api/debug-google', (req, res) => {
-    console.log('[debug-google] request received');
-    console.log('[debug-google] body:', req.body);
-
-    res.json({
-      ok: true,
-      message: 'This is the index.js currently running on Vercel',
-      bodyReceived: req.body,
-    });
-  });
-
-  // ==================================================
-  // DATABASE CONNECTION
-  // ==================================================
+  //
+  // Health endpoint above does NOT require MongoDB.
+  // All routes below will wait for MongoDB.
+  //
 
   app.use(async (_req, res, next) => {
     try {
@@ -132,15 +87,20 @@ export function createApp() {
   // ==================================================
   // GOOGLE AUTH
   // ==================================================
-
-  // PUBLIC ROUTE
-  // Do NOT put requireAuth before this.
+  //
+  // IMPORTANT:
+  // This route is PUBLIC.
+  // Google login does not have a JWT yet.
+  //
 
   app.use('/api/auth', authRouter);
 
   // ==================================================
-  // PROTECTED API ROUTES
+  // PROTECTED API
   // ==================================================
+  //
+  // Everything else under /api requires login.
+  //
 
   app.use('/api', requireAuth, runsRouter);
 
@@ -160,15 +120,16 @@ export function createApp() {
 }
 
 // ==================================================
-// CREATE APP
+// Create Express app
 // ==================================================
 
 const app = createApp();
 
+// Vercel/serverless uses this export
 export default app;
 
 // ==================================================
-// LOCAL DEVELOPMENT SERVER
+// Local development
 // ==================================================
 
 const isMain =
