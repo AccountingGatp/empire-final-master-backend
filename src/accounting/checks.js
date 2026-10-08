@@ -87,8 +87,8 @@ export function checkNoGuestFee(location, lines, usdIncluded) {
 
 // 7: every expected company has a verified Cash Flow file.
 export function checkCashFlowFiles(files) {
-  return expectedCompanies().map(({ name, key }) => {
-    const f = files.find((t) => t.type === 'account' && normName(t.sellerName) === key);
+  return expectedCompanies().map(({ name, keys }) => {
+    const f = files.find((t) => t.type === 'account' && keys.has(normName(t.sellerName)));
     const ok = !!f && f.status === 'done' && !!f.reportCheck?.pass;
     const note = !f
       ? 'no Cash Flow file for this company in the run'
@@ -115,9 +115,14 @@ export function checkRates(location, included, rmap) {
 }
 
 // 9: no included row has Source = viator.
-export function checkNoViatorIncluded(location, included) {
-  const n = included.filter((r) => String(r.source).trim().toLowerCase() === 'viator').length;
-  return result('X9', location, 'No included row has Source = viator', 0, n, { unit: 'count' });
+export function checkNoViatorIncluded(location, included, viatorInXola = false) {
+  const viatorRows = included.filter((r) => String(r.source).trim().toLowerCase() === 'viator');
+  if (viatorInXola) {
+    // Setting viatorInXola: every Viator row must sit on the Viator clearing account.
+    const wrong = viatorRows.filter((r) => r.group !== 'viator').length;
+    return result('X9', location, 'Every Source = viator row posts to 10032 Viator Sales', 0, wrong, { unit: 'count' });
+  }
+  return result('X9', location, 'No included row has Source = viator', 0, viatorRows.length, { unit: 'count' });
 }
 
 // 10: no included row is an office booking with a blank Payout Date.

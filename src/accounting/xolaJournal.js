@@ -7,7 +7,7 @@ import { splitRows } from './classify.js';
 import { needsConversion, rateKey, rateMap, rateProblem } from './fx.js';
 import * as C from './checks.js';
 
-const GROUP_ORDER = ['xola', 'gyg', 'airbnb', 'groupon'];
+const GROUP_ORDER = ['xola', 'gyg', 'airbnb', 'groupon', 'viator'];
 const sum = (arr, f) => arr.reduce((s, x) => s + (f(x) || 0), 0);
 
 // Convert one included row to USD cents.
@@ -94,6 +94,34 @@ export function locationLines(location, klass, usdIncluded, meta) {
   return lines;
 }
 
+// Per Source value, as Xola shows it on the Transactions sheet: what the file
+// says (local currency) and where the app puts it. Lets the reviewer tie each
+// clearing account to Xola's Source / Channels filter.
+export function sourceBreakdown(split, usdIncluded = []) {
+  const usdBy = new Map();
+  for (const r of usdIncluded) {
+    const k = r.source || '(blank)';
+    usdBy.set(k, (usdBy.get(k) || 0) + r.usd.net);
+  }
+  const map = new Map();
+  const add = (rows, treat) => {
+    for (const r of rows) {
+      const k = r.source || '(blank)';
+      const e = map.get(k) || { source: k, rows: 0, grossLocalCents: 0, netLocalCents: 0, netUsdCents: null, postedTo: treat(r) };
+      e.rows++;
+      e.grossLocalCents += r.gross;
+      e.netLocalCents += r.net;
+      map.set(k, e);
+    }
+  };
+  add(split.included, (r) => ACCOUNTS.clearing[r.group]);
+  add(split.viator, () => 'Left out — posted from the Viator advice (VIA journal)');  // only when viatorInXola = false
+  add(split.office, () => 'Left out — office booking with no Payout Date (OFFICE list)');
+  add(split.review, () => 'Left out — Source not in the SOP (review list)');
+  for (const e of map.values()) if (usdBy.has(e.source)) e.netUsdCents = usdBy.get(e.source);
+  return [...map.values()].sort((a, b) => Math.abs(b.netLocalCents) - Math.abs(a.netLocalCents));
+}
+
 /**
  * Build the XOLA journal.
  * @param {object} input
@@ -171,7 +199,8 @@ export function buildXolaJournal({ month, sellers, rates = [], files = [], optio
       officeRows: officeRows.length,
       reviewRows: reviewRows.length,
       clearingCents, // USD, signed (debit positive)
-      viatorNetLocalCents: sum(viator, (r) => r.net),
+      viatorNetLocalCents: sum([...viator, ...included.filter((r) => r.group === 'viator')], (r) => r.net),
+      bySource: sourceBreakdown({ included, viator, office: officeRows, review: reviewRows }, usdIncluded),
       grossUsdCents: sum(usdIncluded, (r) => r.usd.gross),
     });
 
@@ -180,7 +209,7 @@ export function buildXolaJournal({ month, sellers, rates = [], files = [], optio
       C.checkNetFormula(location, included),
       C.checkNoGuestFee(location, locLines, usdIncluded),
       C.checkRates(location, included, rmap),
-      C.checkNoViatorIncluded(location, included),
+      C.checkNoViatorIncluded(location, included, options.viatorInXola),
       C.checkNoOfficeBlankIncluded(location, included),
       C.checkClasses(location, locLines),
       C.checkRowCounts(location, s.rows, included, viator, officeRows, reviewRows)
@@ -201,7 +230,7 @@ export function buildXolaJournal({ month, sellers, rates = [], files = [], optio
   }
 
   if (missingRates.size) {
-    const err = new Error(`FX rates needed before the journal can be built:\n${[...missingRates].join('\n')}`);
+    const err = new Error(`FX rates needed before the journal can be built (enter them in step 3 and click “Save rates”):\n${[...missingRates].join('\n')}`);
     err.code = 'FX_RATES_MISSING';
     err.details = [...missingRates];
     throw err;

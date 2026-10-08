@@ -14,6 +14,7 @@ export function classifyRow(row) {
     err.code = 'UNKNOWN_SOURCE';
     throw err;
   }
+  if (rule.exclude === 'viator' && OPTIONS.viatorInXola) return { action: 'include', group: 'viator' };
   if (rule.exclude) return { action: 'exclude', reason: rule.exclude };
   if (rule.excludeWhenNoPayoutDate) {
     if (row.recognized) {

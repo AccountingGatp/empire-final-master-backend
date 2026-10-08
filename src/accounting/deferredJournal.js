@@ -103,7 +103,7 @@ export function buildDeferredJournal({ month, xola, earnings, rates = [], files 
   }
 
   if (missingRates.size) {
-    const err = new Error(`FX rates needed before the deferred journal can be built:\n${[...missingRates].join('\n')}`);
+    const err = new Error(`FX rates needed before the deferred journal can be built (enter them in step 3 and click “Save rates”):\n${[...missingRates].join('\n')}`);
     err.code = 'FX_RATES_MISSING';
     err.details = [...missingRates];
     throw err;

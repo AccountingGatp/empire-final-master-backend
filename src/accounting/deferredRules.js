@@ -20,7 +20,7 @@ function kind(row, recognizedFile) {
   const source = String(row.source ?? '').trim().toLowerCase();
   const rule = Object.prototype.hasOwnProperty.call(SOURCES, source) ? SOURCES[source] : null;
   if (!rule || rule.exclude === 'review') return 'review'; // tiqets, blank, unknown
-  if (rule.exclude === 'viator') return 'viator';
+  if (rule.exclude === 'viator') return OPTIONS.viatorInXola ? 'normal' : 'viator';
   if (rule.excludeWhenNoPayoutDate) {
     if (recognizedFile) return /electronic|credit|card/i.test(row.method || '') ? 'officeCard' : 'officeOther';
     return String(row.payoutDate ?? '').trim() ? 'officeCard' : 'officeOther';

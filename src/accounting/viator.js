@@ -165,7 +165,7 @@ export function buildViatorJournal({ month, advices, rates = [], xola = null, pr
     figures.push({ location, class: who.company.class, currency, adviceLocalCents: local, adviceUsdCents: usd, files: list.map((a) => a.fileName) });
 
     const locLines = [];
-    if (usd !== 0) {
+    if (usd !== 0 && !options.viatorInXola) {
       for (const [account, side] of [[ACCOUNTS.viatorClearing, 'debit'], [ACCOUNTS.viatorRevenue, 'credit']]) {
         const { debit, credit } = place(usd, side);
         locLines.push({ ...meta, account, debit, credit, description: `Viator net per payment advice – ${location}`, class: who.company.class, location, basis: 'adviceNet', amount: usd });
@@ -174,7 +174,7 @@ export function buildViatorJournal({ month, advices, rates = [], xola = null, pr
     lines.push(...locLines);
 
     const journalDebit = locLines.filter((l) => l.account === ACCOUNTS.viatorClearing).reduce((s, l) => s + l.debit - l.credit, 0);
-    checks.push(C.checkViatorEntity(location, journalDebit, usd));
+    if (!options.viatorInXola) checks.push(C.checkViatorEntity(location, journalDebit, usd));
     checks.push(C.checkClasses(location, locLines, 'V7'));
 
     const xolaLoc = (xola?.locations || []).find((l) => normName(l.location) === normName(location));
@@ -189,7 +189,7 @@ export function buildViatorJournal({ month, advices, rates = [], xola = null, pr
   }
 
   if (missingRates.size) {
-    const err = new Error(`FX rates needed before the Viator journal can be built:\n${[...missingRates].join('\n')}`);
+    const err = new Error(`FX rates needed before the Viator journal can be built (enter them in step 3 and click “Save rates”):\n${[...missingRates].join('\n')}`);
     err.code = 'FX_RATES_MISSING';
     err.details = [...missingRates];
     throw err;
@@ -200,7 +200,9 @@ export function buildViatorJournal({ month, advices, rates = [], xola = null, pr
   checks.push(
     ...C.checkViatorContinuity(previous.locations || [], [...byLoc.values()].map((b) => b.location), previous.hadRun),
     C.checkViatorDate(meta.journalDate, period.journalDate),
-    C.checkViatorTotal(journalTotal, adviceTotal),
+    ...(options.viatorInXola
+      ? [C.result('V4', 'ALL', 'Viator is posted in the XOLA journal (setting viatorInXola) — advices are a check only, nothing to import here', 'check only', 'check only', { unit: 'text', pass: true })]
+      : [C.checkViatorTotal(journalTotal, adviceTotal)]),
     ...C.checkBalanced(lines, 'V6')
   );
   if (!xola) {

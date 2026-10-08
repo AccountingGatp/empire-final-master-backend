@@ -4,6 +4,9 @@ import { classifyRow, splitRows } from '../src/accounting/classify.js';
 import { place, toCents, normDate, monthMeta, previousMonth, convertCents } from '../src/accounting/money.js';
 import { rateProblem, mergeRateTable, rateMap, rateKey } from '../src/accounting/fx.js';
 import { lookupCompany, nameFor, OPTIONS, ACCOUNTS } from '../src/accounting/settings.js';
+import { OPTIONS as SOP_OPTIONS } from '../src/accounting/settings.js';
+// These tests cover the SOP Part B behaviour (Viator from the advice only).
+SOP_OPTIONS.viatorInXola = false;
 
 // ---- Source classification ------------------------------------------------------
 test('Source: checkout / refund / office-with-payout go to Xola clearing', () => {

@@ -13,6 +13,7 @@ export const ACCOUNTS = {
     gyg: '10032.3 Sales Clearing Account:GYG Sales',
     airbnb: '10032.1 Sales Clearing Account:Airbnb Sales',
     groupon: '10032.2 Sales Clearing Account:Groupon Sales',
+    viator: '10032 Sales Clearing Account:Viator Sales', // used when OPTIONS.viatorInXola = true
   },
   processing: '40002.2 Processing Fees - Xola', // open question 6: confirm exact QBO name
   service: '40001.2 Service Fees', // NOT 40001.1 (that is Deferred Revenue)
@@ -53,6 +54,7 @@ export const GROUP_LABELS = {
   gyg: 'GetYourGuide',
   airbnb: 'Airbnb',
   groupon: 'Groupon',
+  viator: 'Viator',
 };
 
 // ---- Companies / classes -----------------------------------------------------
@@ -109,6 +111,13 @@ export const OPTIONS = {
   // (Method "Electronic") count, others (Method "Other") are left out like unpaid
   // office bookings; or 'include' / 'exclude' every office row. Check against the
   // known Deferred totals (D5) and change if the Controller decides otherwise.
+  // Viator (Controller decision, Oct 2026): post Xola's Source = viator rows in
+  // the XOLA journal like Groupon / GYG / Airbnb — Dr 10032 Viator Sales clearing
+  // (net), fees and gross with the rest. The Viator advice (step 6) is then used
+  // to CHECK the clearing, not posted again (no VIA lines, so no double count).
+  // false = SOP Part B: leave Viator out of XOLA and post it from the advice.
+  viatorInXola: true,
+
   recognizedOfficeRule: 'include', // set by the user for Aug 2026 (closest to the known total)
 };
 
@@ -214,8 +223,14 @@ export function lookupCompany(sellerName, options = OPTIONS) {
 }
 
 // Distinct expected companies (normalised names), for the missing-company warning.
+// `keys` holds the current AND former names (aliases), so a renamed seller
+// (Italy Tours -> "Milan Tours" in Xola) is not reported missing.
 export function expectedCompanies() {
-  return COMPANIES.map((c) => ({ name: c.name, key: normName(c.name) }));
+  return COMPANIES.map((c) => ({
+    name: c.name,
+    key: normName(c.name),
+    keys: new Set([c.name, ...(c.aliases || [])].map(normName)),
+  }));
 }
 
 // Replace {YYYY}/{MM} in a NAMES pattern.

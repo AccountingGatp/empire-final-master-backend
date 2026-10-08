@@ -8,6 +8,9 @@ import { buildViatorJournal, parseAdvice } from '../src/accounting/viator.js';
 import { writeJournalXlsx, writeOfficeXlsx, writeChecksXlsx } from '../src/accounting/output.js';
 import { ACCOUNTS } from '../src/accounting/settings.js';
 import XLSX from 'xlsx';
+import { OPTIONS as SOP_OPTIONS } from '../src/accounting/settings.js';
+// These tests cover the SOP Part B behaviour (Viator from the advice only).
+SOP_OPTIONS.viatorInXola = false;
 
 const parse = (buf) => {
   const wb = readWorkbook(buf);

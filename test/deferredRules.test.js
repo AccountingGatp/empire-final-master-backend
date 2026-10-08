@@ -4,6 +4,9 @@ import { testDeferredRules } from '../src/accounting/deferredRules.js';
 import { OPTIONS } from '../src/accounting/settings.js';
 import { readWorkbook, parseTransactions } from '../src/accounting/workbook.js';
 import XLSX from 'xlsx';
+import { OPTIONS as SOP_OPTIONS } from '../src/accounting/settings.js';
+// These tests cover the SOP Part B behaviour (Viator from the advice only).
+SOP_OPTIONS.viatorInXola = false;
 
 const row = (source, net, extra = {}) => ({ source, net, currency: 'USD', payoutDate: '2026-08-10', method: 'Credit Card', ...extra });
 
@@ -75,4 +78,11 @@ test('real Xola Recognized file: rows tie to the Summary', async () => {
   const wb = readWorkbook(fs.readFileSync(f));
   const rows = parseTransactions(wb);
   assert.equal(rows.reduce((t, r) => t + r.net, 0), parseSummaryTotals(wb).net);
+});
+
+test('a renamed seller (Milan Tours) counts as Italy Tours: not missing, X7 passes', async () => {
+  const { checkCashFlowFiles } = await import('../src/accounting/checks.js');
+  const files = [{ type: 'account', sellerName: 'Milan Tours', status: 'done', reportCheck: { pass: true } }];
+  const italy = checkCashFlowFiles(files).find((c) => c.location === 'Italy Tours');
+  assert.equal(italy.pass, true);
 });

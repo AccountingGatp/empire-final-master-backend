@@ -124,7 +124,7 @@ function companyReport(run, tasks) {
   const sellers = [...new Set(tasks.filter((t) => t.type !== 'viator').map((t) => t.sellerName))];
   const have = new Set(sellers.map(normName));
   const missing = expectedCompanies()
-    .filter((c) => !have.has(c.key))
+    .filter((c) => ![...c.keys].some((k) => have.has(k)))
     .map((c) => c.name);
   const notPosted = sellers
     .map((name) => ({ name, ...lookupCompany(name, OPTIONS) }))
