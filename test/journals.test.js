@@ -178,13 +178,12 @@ test('XOLA: an unknown Source stops the build', () => {
   );
 });
 
-test('XOLA: Summary mismatch fails checks 1–4 → journal would be blocked', () => {
+test('XOLA: the Summary tab is not used — a different Summary changes nothing', () => {
   const rows = [tx()];
   const buf = workbook(rows, { summaryOverride: { gross: 100, pf: 3, sf: 2, gf: 1.5, net: 94 } });
   const j = buildXolaJournal({ month: '2026-08', sellers: [{ sellerName: CHI, ...parse(buf) }], files: FILES });
-  const x1 = j.checks.find((c) => c.id === 'X1' && c.location === CHI);
-  assert.equal(x1.pass, false);
-  assert.equal(x1.diff, 100);
+  assert.equal(j.checks.filter((c) => ['X1', 'X2', 'X3', 'X4'].includes(c.id)).length, 0);
+  assert.equal(j.lines.reduce((t, l) => t + l.debit, 0), j.lines.reduce((t, l) => t + l.credit, 0));
 });
 
 // ---- Deferred ------------------------------------------------------------------------------

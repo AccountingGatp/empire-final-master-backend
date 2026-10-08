@@ -205,7 +205,6 @@ export function buildXolaJournal({ month, sellers, rates = [], files = [], optio
     });
 
     checks.push(
-      ...C.checkSummaryTies(location, s.rows, summaryFor(s)),
       C.checkNetFormula(location, included),
       C.checkNoGuestFee(location, locLines, usdIncluded),
       C.checkRates(location, included, rmap),

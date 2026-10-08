@@ -10,6 +10,7 @@ import { testDeferredRules } from '../accounting/deferredRules.js';
 import { buildViatorJournal, neededViatorRates, parseAdvice, homeCurrency } from '../accounting/viator.js';
 import { mergeRateTable, rateKey, rateProblem } from '../accounting/fx.js';
 import { journalStatus } from '../accounting/checks.js';
+import { suggestRates } from './fxRates.js';
 import { previousMonth } from '../accounting/money.js';
 import { writeJournalXlsx, writeOfficeXlsx, writeChecksXlsx } from '../accounting/output.js';
 
@@ -176,12 +177,43 @@ export async function scanFxRates(runId) {
   ];
   run.fxRates = mergeRateTable(run.fxRates.map((r) => r.toObject?.() || r), needed);
   run.fxScannedAt = new Date();
+  await autoFillEcbRates(run);
   await run.save();
   return run;
 }
 
 // Add rate rows the files need but the table doesn't have yet (keeps every
 // existing row and entered rate). Returns how many were added.
+// Fill every EMPTY rate with the ECB rate for its date (setting autoEcbRates).
+// Rates someone typed are never overwritten. If frankfurter.dev can't be
+// reached the rows stay empty and the build asks for them as before.
+async function autoFillEcbRates(run) {
+  if (!OPTIONS.autoEcbRates) return 0;
+  const empty = run.fxRates.filter((r) => r.rate === null || r.rate === undefined);
+  if (!empty.length) return 0;
+  let res;
+  try {
+    res = await suggestRates({ fxRates: empty.map((r) => (r.toObject ? r.toObject() : r)), to: run.to });
+  } catch (err) {
+    console.warn('[fx] automatic ECB rates skipped:', err.message);
+    return 0;
+  }
+  const by = new Map(res.suggestions.map((s) => [rateKey(s.location, s.currency, s.date), s]));
+  let filled = 0;
+  for (const r of run.fxRates) {
+    if (r.rate !== null && r.rate !== undefined) continue;
+    const s = by.get(rateKey(r.location, r.currency, r.date));
+    if (!s || rateProblem(r.currency, s.rate)) continue;
+    r.rate = s.rate;
+    r.origin = 'ecb';
+    r.enteredBy = 'automatic (ECB)';
+    r.enteredAt = new Date();
+    filled++;
+  }
+  if (filled) run.markModified('fxRates');
+  return filled;
+}
+
 function addMissingRates(run, needed) {
   const have = new Map(run.fxRates.map((r) => [rateKey(r.location, r.currency, r.date), r]));
   let added = 0;
@@ -339,12 +371,13 @@ export async function buildXola(runId, user) {
 
   let stage = 'reading the Cash Flow files from Backblaze';
   try {
-    const sellers = await parseFiles(accountTasks, { withSummary: true });
+    const sellers = await parseFiles(accountTasks); // Transactions tab only
 
     // Make sure step 3's rate table lists every rate these files need (it may
-    // have been scanned while the files couldn't be read).
+    // have been scanned while the files couldn't be read), and fill empty ones.
     const added = addMissingRates(run, neededRates(sellers, 'xola'));
-    if (added) await run.save();
+    const filled = await autoFillEcbRates(run);
+    if (added || filled) await run.save();
 
     stage = 'building the journal';
     let built;
@@ -437,13 +470,14 @@ export async function buildDeferred(runId, user) {
   const earningTasks = doneTasks(tasks, 'earnings');
   if (!earningTasks.length) throw new UserError('no verified Recognized Earnings files yet');
 
+  await autoFillEcbRates(run);
   run.journals.deferred.status = 'generating';
   await run.save();
 
   let built;
   let ruleTest = null;
   try {
-    const earnings = await parseFiles(earningTasks, { withSummary: true });
+    const earnings = await parseFiles(earningTasks); // Transactions tab only
     // Months with a known Deferred total (SOP 10.5): try every reading of the
     // rule and report which one gives that total. Never blocks the build.
     try {
@@ -507,6 +541,7 @@ export async function buildViator(runId, user) {
     locations: [...new Set(prevAdvices.map((t) => t.sellerName))],
   };
 
+  await autoFillEcbRates(run);
   run.journals.viator.status = 'generating';
   await run.save();
 

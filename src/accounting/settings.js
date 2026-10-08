@@ -118,6 +118,11 @@ export const OPTIONS = {
   // false = SOP Part B: leave Viator out of XOLA and post it from the advice.
   viatorInXola: true,
 
+  // FX (Controller decision, Oct 2026): fill every empty rate automatically with
+  // the ECB rate for that payout date (frankfurter.dev). Anyone can still open
+  // step 3 and type a different rate (e.g. the banked Wise rate or an average).
+  autoEcbRates: true,
+
   recognizedOfficeRule: 'include', // set by the user for Aug 2026 (closest to the known total)
 };
 

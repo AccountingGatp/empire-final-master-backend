@@ -68,13 +68,7 @@ export function buildDeferredJournal({ month, xola, earnings, rates = [], files 
     let recognized = 0;
     const e = earnBy.get(key);
     if (e && !e.error) {
-      // D6: the Recognized file ties to itself — all rows = its Summary Net.
-      const allNet = e.rows.reduce((t, r) => t + r.net, 0);
-      if (e.summary && !e.summary.error && e.summary.net !== null && e.summary.net !== undefined) {
-        checks.push(C.result('D6', location, 'Recognized rows = Recognized Summary Net', e.summary.net, allNet));
-      } else if (e.rows.length) {
-        checks.push(C.result('D6', location, 'Recognized rows = Recognized Summary Net', null, allNet, { pass: false, note: e.summary?.error || 'Summary sheet has no Net column' }));
-      }
+      // Transactions tab only — the Summary tab is not used (Controller, Oct 2026).
       const { included } = splitRows(e.rows, location); // throws on unknown Source
       for (const r of included) {
         const usd = toUsd(r, location, rmap);

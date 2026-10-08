@@ -88,7 +88,6 @@ const RECOGNIZED = [
   { id: '4', label: 'all office + Viator', pick: (t) => t.normal + t.officeCard + t.officeOther + t.viator },
   { id: '5', label: 'office by Method + Viator', pick: (t) => t.normal + t.officeCard + t.viator },
   { id: '6', label: 'every row', pick: (t) => t.normal + t.officeCard + t.officeOther + t.viator + t.review },
-  { id: '7', label: 'the Summary sheet Net', pick: (t, s) => s },
 ];
 
 /**
