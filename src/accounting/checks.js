@@ -3,7 +3,7 @@
 //   { id, location, name, expected, actual, diff, pass, unit, note?, hardStop? }
 // unit: 'money' (cents) | 'count' | 'text'
 
-import { normName, expectedCompanies, companyNames, VIATOR, KNOWN_DEFERRED_TOTALS } from './settings.js';
+import { normName, expectedCompanies, companyNames, VIATOR } from './settings.js';
 import { needsConversion, rateKey } from './fx.js';
 
 const sum = (arr, f) => arr.reduce((s, x) => s + (f(x) || 0), 0);
@@ -207,13 +207,6 @@ export function checkDeferredFiles(location, files) {
 // D2: the Cash Flow figure used = the XOLA journal's clearing debit for the location.
 export function checkCashFlowTie(location, cashFlowCents, xolaClearingCents) {
   return result('D2', location, 'Cash Flow figure = XOLA clearing debit', xolaClearingCents, cashFlowCents);
-}
-
-// D5: the month's Deferred total matches a known answer (only for months listed).
-export function checkKnownDeferred(month, totalCents) {
-  const known = KNOWN_DEFERRED_TOTALS[month];
-  if (known === undefined) return [];
-  return [result('D5', 'ALL', `Deferred total = known answer for ${month}`, known, totalCents)];
 }
 
 // ---- Viator checks (V1–V6) ------------------------------------------------------

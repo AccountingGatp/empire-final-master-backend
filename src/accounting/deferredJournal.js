@@ -7,13 +7,13 @@
 //                         "Previously Collected - Gross" + "Collected In Period - Gross"
 //   Deferred            = Cash Flow − Recognized Earnings   (gross, not net)
 //
-// All rows count — no Source exclusions (checked against the Controller's
-// September 2026 entry: Chicago River Boat −124,654.57 to the cent).
+// All rows count — no Source exclusions. Works the same for every month; no
+// month figures are stored in the app.
 // Posted ONE pair of lines per CLASS (companies sharing a class are added up):
 //   Dr 40001.1 Sales Revenue - Deferred / Cr 22001 Deferred Revenue
 // A negative Deferred flips the sides via place(). NEVER a reversing entry.
 
-import { ACCOUNTS, OPTIONS, KNOWN_DEFERRED_BY_CLASS, lookupCompany, nameFor } from './settings.js';
+import { ACCOUNTS, OPTIONS, lookupCompany, nameFor } from './settings.js';
 import { place, monthMeta } from './money.js';
 import { makeConverter } from './deferredRules.js';
 import * as C from './checks.js';
@@ -110,15 +110,8 @@ export function buildDeferredJournal({ month, cashFlow = [], earnings = [], rate
   const total = sum(figures, (f) => f.deferredCents);
   checks.push(
     ...C.checkBalanced(lines, 'D3'),
-    ...[...byClass.keys()].map((k) => C.checkClasses(k, lines.filter((l) => l.class === k), 'D4')),
-    ...C.checkKnownDeferred(month, total)
+    ...[...byClass.keys()].map((k) => C.checkClasses(k, lines.filter((l) => l.class === k), 'D4'))
   );
-  const knownByClass = KNOWN_DEFERRED_BY_CLASS[month];
-  if (knownByClass) {
-    for (const [klass, cents] of Object.entries(knownByClass)) {
-      checks.push(C.result('D5', klass, `Deferred for the class = Controller's entry for ${month}`, cents, byClass.get(klass)?.deferredCents ?? 0));
-    }
-  }
   if (approxRows) {
     checks.push(
       C.result('D7', 'ALL', 'Every foreign row had its own FX rate', 0, approxRows, {

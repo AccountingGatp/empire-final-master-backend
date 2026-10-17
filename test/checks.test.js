@@ -121,9 +121,6 @@ test('D0–D2 and D5 deferred checks', () => {
   assert.equal(C.checkDeferredFiles(L, files.slice(0, 1)).pass, false);
   assert.equal(C.checkCashFlowTie(L, 500, 500).pass, true);
   assert.equal(C.checkCashFlowTie(L, 500, 400).pass, false);
-  assert.equal(C.checkKnownDeferred('2026-08', 788666)[0].pass, true);
-  assert.equal(C.checkKnownDeferred('2026-01', 8526930)[0].pass, false);
-  assert.deepEqual(C.checkKnownDeferred('2026-03', 1), []);
 });
 
 test('V1–V5 Viator checks', () => {

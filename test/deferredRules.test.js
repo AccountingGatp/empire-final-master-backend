@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { testDeferredRules } from '../src/accounting/deferredRules.js';
+import { makeConverter } from '../src/accounting/deferredRules.js';
 import { OPTIONS } from '../src/accounting/settings.js';
 import { readWorkbook, parseTransactions } from '../src/accounting/workbook.js';
 import XLSX from 'xlsx';
@@ -10,38 +10,14 @@ SOP_OPTIONS.viatorInXola = false;
 
 const row = (source, net, extra = {}) => ({ source, net, currency: 'USD', payoutDate: '2026-08-10', method: 'Credit Card', ...extra });
 
-test('rule test: finds the reading that gives the known August total', () => {
-  // Known Aug total = 7,886.66. Build data where "A4" (clearing − Recognized incl. Viator) hits it.
-  const cashFlow = [{ sellerName: 'Chicago Private Tours', rows: [row('checkout', 1000000), row('viator', 50000)] }];
-  const earnings = [{
-    sellerName: 'Chicago Private Tours',
-    rows: [row('checkout', 200000, { payoutDate: '' }), row('viator', 11334, { payoutDate: '' })],
-    summary: { net: 211334 },
-  }];
-  const r = testDeferredRules({ month: '2026-08', cashFlow, earnings });
-  assert.equal(r.knownCents, 788666);
-  assert.equal(r.variants[0].diffCents, 0);
-  assert.match(r.variants[0].id, /^A[4-7]/);
-  assert.equal(r.current, `A${{ include: '1', byMethod: '2', exclude: '3' }[OPTIONS.recognizedOfficeRule]}`);
-  assert.equal(testDeferredRules({ month: '2026-05', cashFlow, earnings }), null);
-});
-
-test('rule test: office rows split by Method on the Recognized side', () => {
-  const cashFlow = [{ sellerName: 'Chicago Private Boat Tours', rows: [row('checkout', 100000)] }];
-  const earnings = [{
-    sellerName: 'Chicago Private Boat Tours',
-    rows: [row('office', 30000, { method: 'Other', payoutDate: '' }), row('office', 20000, { method: 'Electronic', payoutDate: '' })],
-  }];
-  const r = testDeferredRules({ month: '2026-08', cashFlow, earnings });
-  const all = Object.fromEntries(r.variants.map((v) => [v.id, v.totalCents]));
-  // variants list is the closest 12; recompute the three office readings directly
-  const again = testDeferredRules({ month: '2026-08', cashFlow, earnings });
-  const want = { A1: 100000 - 50000, A2: 100000 - 20000, A3: 100000 };
-  for (const [id, cents] of Object.entries(want)) {
-    const v = again.variants.find((x) => x.id === id);
-    if (v) assert.equal(v.totalCents, cents);
-  }
-  assert.ok(Object.keys(all).length > 0);
+test('FX converter: exact rate for the date, else the nearest rate for the location', () => {
+  const conv = makeConverter([
+    { location: 'London Sightseeing Tours', currency: 'GBP', date: '2026-09-10', rate: 1.35 },
+    { location: 'London Sightseeing Tours', currency: 'GBP', date: '2026-09-20', rate: 1.33 },
+  ]);
+  assert.deepEqual(conv('London Sightseeing Tours', 'GBP', '2026-09-10', 10000), { usd: 13500, approx: false });
+  assert.deepEqual(conv('London Sightseeing Tours', 'GBP', '2026-09-19', 10000), { usd: 13300, approx: true });
+  assert.deepEqual(conv('Chicago Private Tours', 'USD', '', 10000), { usd: 10000, approx: false });
 });
 
 test('empty Transactions sheet with a "No results" line = no activity', () => {
