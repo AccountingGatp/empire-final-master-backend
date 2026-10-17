@@ -6,7 +6,6 @@ import { OPTIONS, nameFor } from '../accounting/settings.js';
 import { readWorkbook, parseTransactions, parseSummaryTotals, checkReportDetails } from '../accounting/workbook.js';
 import { buildXolaJournal, neededRates } from '../accounting/xolaJournal.js';
 import { buildDeferredJournal } from '../accounting/deferredJournal.js';
-import { testDeferredRules } from '../accounting/deferredRules.js';
 import { buildViatorJournal, neededViatorRates, parseAdvice, homeCurrency } from '../accounting/viator.js';
 import { mergeRateTable, rateKey, rateProblem } from '../accounting/fx.js';
 import { journalStatus } from '../accounting/checks.js';
@@ -463,11 +462,11 @@ export async function buildXola(runId, user) {
 // Step 5: DEF journal.
 export async function buildDeferred(runId, user) {
   const run = await getRun(runId);
-  const x = run.journals.xola;
-  if (!x || !['ready', 'blocked'].includes(x.status)) throw new UserError('build the XOLA journal first');
   const tasks = await plainTasks(runId);
   await verifyUncheckedFiles(run, tasks);
   const earningTasks = doneTasks(tasks, 'earnings');
+  const accountTasks = doneTasks(tasks, 'account');
+  if (!accountTasks.length) throw new UserError('no verified Cash Flow files yet');
   if (!earningTasks.length) throw new UserError('no verified Recognized Earnings files yet');
 
   await autoFillEcbRates(run);
@@ -475,26 +474,12 @@ export async function buildDeferred(runId, user) {
   await run.save();
 
   let built;
-  let ruleTest = null;
   try {
-    const earnings = await parseFiles(earningTasks); // Transactions tab only
-    // Months with a known Deferred total (SOP 10.5): try every reading of the
-    // rule and report which one gives that total. Never blocks the build.
-    try {
-      const cashFlow = await parseFiles(doneTasks(tasks, 'account'));
-      ruleTest = testDeferredRules({
-        month: run.month,
-        cashFlow,
-        earnings,
-        rates: run.fxRates.map((r) => r.toObject()),
-        options: OPTIONS,
-      });
-    } catch (err) {
-      console.warn('[deferred] rule test skipped:', err.message);
-    }
+    // Transactions tab only, GROSS of every row (Controller's method, Oct 2026).
+    const [cashFlow, earnings] = await Promise.all([parseFiles(accountTasks), parseFiles(earningTasks)]);
     built = buildDeferredJournal({
       month: run.month,
-      xola: { status: x.status, lines: x.lines, locations: x.locations },
+      cashFlow,
       earnings,
       rates: run.fxRates.map((r) => r.toObject()),
       files: tasks,
@@ -516,7 +501,7 @@ export async function buildDeferred(runId, user) {
     storageKey: key,
     user,
     checks: built.checks,
-    extra: { figures: built.figures, rowCount: built.figures.length, ruleTest },
+    extra: { figures: built.figures, rowCount: built.figures.length, ruleTest: null },
   });
   applyStatus(run, 'deferred');
   await run.save();

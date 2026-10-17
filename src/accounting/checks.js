@@ -3,7 +3,7 @@
 //   { id, location, name, expected, actual, diff, pass, unit, note?, hardStop? }
 // unit: 'money' (cents) | 'count' | 'text'
 
-import { normName, expectedCompanies, VIATOR, KNOWN_DEFERRED_TOTALS } from './settings.js';
+import { normName, expectedCompanies, companyNames, VIATOR, KNOWN_DEFERRED_TOTALS } from './settings.js';
 import { needsConversion, rateKey } from './fx.js';
 
 const sum = (arr, f) => arr.reduce((s, x) => s + (f(x) || 0), 0);
@@ -194,9 +194,9 @@ export function checkXolaReady(xolaStatus) {
 
 // D1: both files exist (verified) for every location.
 export function checkDeferredFiles(location, files) {
-  const key = normName(location);
+  const keys = companyNames(location);
   const has = (type) =>
-    files.some((f) => f.type === type && normName(f.sellerName) === key && f.status === 'done' && f.reportCheck?.pass);
+    files.some((f) => f.type === type && keys.has(normName(f.sellerName)) && f.status === 'done' && f.reportCheck?.pass);
   const missing = ['account', 'earnings'].filter((t) => !has(t));
   return result('D1', location, 'Cash Flow and Recognized Earnings files both verified', 2, 2 - missing.length, {
     unit: 'count',

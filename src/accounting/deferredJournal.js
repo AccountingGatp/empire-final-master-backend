@@ -1,99 +1,86 @@
-// Deferred revenue journal (SOP 10.5). Pure.
-//   Cash Flow           = the location's total clearing debit in the XOLA journal (USD)
-//   Recognized Earnings = Net of the `earnings` export, same Viator / office exclusions (USD)
-//   Deferred            = Cash Flow − Recognized Earnings
-// Entry: Dr 40001.1 Sales Revenue - Deferred / Cr 22001 Deferred Revenue.
-// A negative Deferred flips the sides via place(). NEVER a reversing entry
-// (OPTIONS.deferredReversal = 'never').
+// Deferred revenue journal (SOP 10.5, as the Controller works it — Oct 2026). Pure.
+//
+//   Cash Flow           = GROSS of every row on the Cash Flow export (Analytics ›
+//                         Cash Flow › Export Transactions), column "Gross"
+//   Recognized Earnings = GROSS of every row on the Recognized Earnings export
+//                         (Analytics › Recognized Earnings › Export Transactions):
+//                         "Previously Collected - Gross" + "Collected In Period - Gross"
+//   Deferred            = Cash Flow − Recognized Earnings   (gross, not net)
+//
+// All rows count — no Source exclusions (checked against the Controller's
+// September 2026 entry: Chicago River Boat −124,654.57 to the cent).
+// Posted ONE pair of lines per CLASS (companies sharing a class are added up):
+//   Dr 40001.1 Sales Revenue - Deferred / Cr 22001 Deferred Revenue
+// A negative Deferred flips the sides via place(). NEVER a reversing entry.
 
-import { ACCOUNTS, OPTIONS, lookupCompany, nameFor, normName } from './settings.js';
+import { ACCOUNTS, OPTIONS, KNOWN_DEFERRED_BY_CLASS, lookupCompany, nameFor } from './settings.js';
 import { place, monthMeta } from './money.js';
-import { splitRows } from './classify.js';
-import { rateMap, rateKey, rateProblem } from './fx.js';
-import { toUsd } from './xolaJournal.js';
+import { makeConverter } from './deferredRules.js';
 import * as C from './checks.js';
 
 const sum = (arr, f) => arr.reduce((s, x) => s + (f(x) || 0), 0);
+const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 
 /**
  * @param input
- *   month
- *   xola      the saved XOLA journal { status, lines, locations }
- *   earnings  [{ sellerName, rows, error }] parsed Recognized Earnings files
- *   rates     FX rate table
- *   files     the run's file tasks
+ *   month      'YYYY-MM'
+ *   cashFlow   [{ sellerName, rows, error }] parsed Cash Flow files
+ *   earnings   [{ sellerName, rows, error }] parsed Recognized Earnings files
+ *   rates      FX rate table
+ *   files      the run's file tasks
  */
-export function buildDeferredJournal({ month, xola, earnings, rates = [], files = [], options = OPTIONS }) {
+export function buildDeferredJournal({ month, cashFlow = [], earnings = [], rates = [], files = [], options = OPTIONS }) {
   if (options.deferredReversal !== 'never') {
-    // Guard: the SOP forbids reversing entries; nothing here ever creates one.
     throw new Error('deferredReversal must be "never" (SOP 10.5) — reversing entries are not supported');
   }
-  if (!xola || !Array.isArray(xola.lines) || !xola.lines.length) {
-    throw new Error('build the XOLA journal first');
-  }
-
   const period = monthMeta(month);
   const meta = { journalNo: nameFor('deferred', month), journalDate: period.journalDate };
-  const rmap = rateMap(rates);
+  const description = `Deferred revenue adjustment - ${MONTHS[period.month - 1]} ${period.year}`;
+  const convert = makeConverter(rates);
 
-  const clearingFromLines = new Map(); // location -> signed clearing (debit − credit)
-  for (const l of xola.lines) {
-    if (l.basis !== 'net') continue;
-    clearingFromLines.set(l.location, (clearingFromLines.get(l.location) || 0) + (l.debit - l.credit));
-  }
-  const xolaLoc = new Map((xola.locations || []).map((l) => [normName(l.location), l]));
-  const earnBy = new Map(earnings.map((e) => [normName(e.sellerName), e]));
-
+  // Keyed by the exact Xola seller name: "Tours of NYC" and "ToursOfNYC" are two
+  // different Xola sellers (same class) and must both count.
+  const cfBy = new Map(cashFlow.map((f) => [f.sellerName, f]));
+  const reBy = new Map(earnings.map((f) => [f.sellerName, f]));
   const names = new Map();
-  for (const l of xola.locations || []) names.set(normName(l.location), l.location);
-  for (const e of earnings) {
-    if (lookupCompany(e.sellerName, options).status === 'post') names.set(normName(e.sellerName), e.sellerName);
-  }
+  for (const f of [...cashFlow, ...earnings]) names.set(f.sellerName, f.sellerName);
 
-  const lines = [];
+  const checks = [];
   const figures = [];
-  const checks = [C.checkXolaReady(xola.status)];
   const missingRates = new Set();
+  let approxRows = 0;
+
+  // Gross of a file in USD (all rows).
+  const grossUsd = (file, location, recognized) => {
+    let total = 0;
+    for (const r of file?.rows || []) {
+      const date = recognized ? '' : r.payoutDate;
+      const c = convert(location, r.currency, date, r.gross);
+      if (c.usd === null) {
+        missingRates.add(`${location} · ${r.currency}: no FX rate at all for this currency`);
+        continue;
+      }
+      if (c.approx) approxRows++;
+      total += c.usd;
+    }
+    return total;
+  };
 
   for (const [key, location] of [...names].sort((a, b) => a[1].localeCompare(b[1]))) {
     const who = lookupCompany(location, options);
     if (who.status !== 'post') continue;
     const klass = who.company.class;
+    const cf = cfBy.get(key);
+    const re = reBy.get(key);
 
     checks.push(C.checkDeferredFiles(location, files));
-
-    const cashFlow = xolaLoc.get(key)?.clearingCents ?? 0;
-    checks.push(C.checkCashFlowTie(location, cashFlow, clearingFromLines.get(location) ?? 0));
-
-    let recognized = 0;
-    const e = earnBy.get(key);
-    if (e && !e.error) {
-      // Transactions tab only — the Summary tab is not used (Controller, Oct 2026).
-      const { included } = splitRows(e.rows, location); // throws on unknown Source
-      for (const r of included) {
-        const usd = toUsd(r, location, rmap);
-        if (!usd) {
-          const stored = rates.find((x) => rateKey(x.location, x.currency, x.date) === rateKey(location, r.currency, r.payoutDate));
-          missingRates.add(`${location} · ${r.currency} · ${r.payoutDate || 'no payout date'}: ${rateProblem(r.currency, stored?.rate)}`);
-          continue;
-        }
-        recognized += usd.net;
-      }
-    } else if (e?.error) {
-      checks.push(C.result('D1', location, 'Recognized Earnings file readable', 'readable', 'failed', { unit: 'text', pass: false, note: e.error }));
+    for (const [f, label] of [[cf, 'Cash Flow'], [re, 'Recognized Earnings']]) {
+      if (f?.error) checks.push(C.result('D1', location, `${label} file readable`, 'readable', 'failed', { unit: 'text', pass: false, note: f.error }));
     }
 
-    const deferred = cashFlow - recognized;
-    figures.push({ location, class: klass, cashFlowCents: cashFlow, recognizedCents: recognized, deferredCents: deferred });
-    if (deferred === 0) continue;
-
-    for (const [account, side, text] of [
-      [ACCOUNTS.deferredDebit, 'debit', `Deferred revenue – ${location}`],
-      [ACCOUNTS.deferredCredit, 'credit', `Deferred revenue – ${location}`],
-    ]) {
-      const { debit, credit } = place(deferred, side);
-      lines.push({ ...meta, account, debit, credit, description: text, class: klass, location, basis: 'deferred', amount: deferred });
-    }
+    const cashFlowCents = cf && !cf.error ? grossUsd(cf, location, false) : 0;
+    const recognizedCents = re && !re.error ? grossUsd(re, location, true) : 0;
+    figures.push({ location, class: klass, cashFlowCents, recognizedCents, deferredCents: cashFlowCents - recognizedCents });
   }
 
   if (missingRates.size) {
@@ -103,12 +90,44 @@ export function buildDeferredJournal({ month, xola, earnings, rates = [], files 
     throw err;
   }
 
+  // One pair of lines per class.
+  const byClass = new Map();
+  for (const f of figures) {
+    const c = byClass.get(f.class) || { class: f.class, locations: [], deferredCents: 0 };
+    c.locations.push(f.location);
+    c.deferredCents += f.deferredCents;
+    byClass.set(f.class, c);
+  }
+  const lines = [];
+  for (const c of [...byClass.values()].sort((a, b) => a.class.localeCompare(b.class))) {
+    if (c.deferredCents === 0) continue;
+    for (const [account, side] of [[ACCOUNTS.deferredDebit, 'debit'], [ACCOUNTS.deferredCredit, 'credit']]) {
+      const { debit, credit } = place(c.deferredCents, side);
+      lines.push({ ...meta, account, debit, credit, description, class: c.class, location: c.locations.join(', '), basis: 'deferred', amount: c.deferredCents });
+    }
+  }
+
   const total = sum(figures, (f) => f.deferredCents);
   checks.push(
     ...C.checkBalanced(lines, 'D3'),
-    ...[...new Set(lines.map((l) => l.location))].map((loc) => C.checkClasses(loc, lines.filter((l) => l.location === loc), 'D4')),
+    ...[...byClass.keys()].map((k) => C.checkClasses(k, lines.filter((l) => l.class === k), 'D4')),
     ...C.checkKnownDeferred(month, total)
   );
+  const knownByClass = KNOWN_DEFERRED_BY_CLASS[month];
+  if (knownByClass) {
+    for (const [klass, cents] of Object.entries(knownByClass)) {
+      checks.push(C.result('D5', klass, `Deferred for the class = Controller's entry for ${month}`, cents, byClass.get(klass)?.deferredCents ?? 0));
+    }
+  }
+  if (approxRows) {
+    checks.push(
+      C.result('D7', 'ALL', 'Every foreign row had its own FX rate', 0, approxRows, {
+        unit: 'count',
+        pass: true,
+        note: `${approxRows} GBP/EUR row(s) used the nearest rate for the location (no rate for their own date)`,
+      })
+    );
+  }
 
-  return { ...meta, lines, figures, totalDeferredCents: total, checks };
+  return { ...meta, lines, figures, classes: [...byClass.values()], totalDeferredCents: total, checks };
 }

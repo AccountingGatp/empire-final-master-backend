@@ -186,6 +186,24 @@ export const VIATOR = {
 export const KNOWN_DEFERRED_TOTALS = {
   '2026-01': 8526931, // 85,269.31
   '2026-08': 788666, // 7,886.66
+  '2026-09': -11357870, // −113,578.70 (Controller's September entry)
+};
+
+// The Controller's posted entry, per class (USD cents; positive = Dr 40001.1).
+// September 2026 from the DEF journal file the Controller shared (Oct 2026).
+export const KNOWN_DEFERRED_BY_CLASS = {
+  '2026-09': {
+    'Empire Tours:Amsterdam': -85,
+    'Empire Tours:Charleston': 294406,
+    'Empire Tours:Chicago': -519553,
+    'Empire Tours:Chicago:Chicago Boats': -12465457,
+    'Empire Tours:London': 1451655,
+    'Empire Tours:Milan': -280801,
+    'Empire Tours:Paris': 45571,
+    'Empire Tours:SIA': -196362,
+    'Empire Tours:Washington DC': -423095,
+    NYC: 735851,
+  },
 };
 
 // ---- Helpers -------------------------------------------------------------------

@@ -187,40 +187,47 @@ test('XOLA: the Summary tab is not used — a different Summary changes nothing'
 });
 
 // ---- Deferred ------------------------------------------------------------------------------
-test('DEF: Cash Flow − Recognized Earnings, flips sides when negative, never reverses', () => {
-  const x = buildXolaJournal({ month: '2026-08', sellers: sampleSellers(), rates: RATES, files: FILES });
+test('DEF: GROSS of all Cash Flow rows − GROSS of all Recognized rows, per class, flips when negative, never reverses', () => {
+  const cashFlow = sampleSellers();
   const earnings = [
     { sellerName: CHI, rows: parse(workbook([tx({ gross: 50, processingFee: 1, serviceFee: 1 })], { type: 'earnings' })).rows },
     { sellerName: LON, rows: parse(workbook([tx({ Currency: 'GBP', gross: 500, processingFee: 0, serviceFee: 0, net: 500, 'Payout Date': '2026-08-10' })], { type: 'earnings' })).rows },
   ];
-  const d = buildDeferredJournal({
-    month: '2026-08',
-    xola: { status: 'ready', lines: x.lines, locations: x.locations },
-    earnings,
-    rates: RATES,
-    files: FILES,
-  });
+  const d = buildDeferredJournal({ month: '2026-08', cashFlow, earnings, rates: RATES, files: FILES });
   assert.equal(d.journalNo, 'DEF-2026-08');
   const chi = d.figures.find((f) => f.location === CHI);
-  assert.equal(chi.cashFlowCents, 16400); // 84 + 80
-  assert.equal(chi.recognizedCents, 4800);
-  assert.equal(chi.deferredCents, 11600);
-  const chiLines = d.lines.filter((l) => l.location === CHI);
-  assert.equal(chiLines.find((l) => l.account === ACCOUNTS.deferredDebit).debit, 11600);
-  assert.equal(chiLines.find((l) => l.account === ACCOUNTS.deferredCredit).credit, 11600);
+  assert.equal(chi.cashFlowCents, 25500); // gross of ALL rows: 100 − 40 + 80 + 60 + 25 + 30
+  assert.equal(chi.recognizedCents, 5000);
+  assert.equal(chi.deferredCents, 20500);
+  const chiLines = d.lines.filter((l) => l.class === 'Empire Tours:Chicago');
+  assert.equal(chiLines.find((l) => l.account === ACCOUNTS.deferredDebit).debit, 20500);
+  assert.equal(chiLines.find((l) => l.account === ACCOUNTS.deferredCredit).credit, 20500);
+  assert.equal(chiLines[0].description, 'Deferred revenue adjustment - Aug 2026');
 
   const lon = d.figures.find((f) => f.location === LON);
-  assert.equal(lon.recognizedCents, 65000); // 500 GBP @ 1.3
   assert.ok(lon.deferredCents < 0);
-  const lonLines = d.lines.filter((l) => l.location === LON);
+  const lonLines = d.lines.filter((l) => l.class === 'Empire Tours:London');
   assert.equal(lonLines.find((l) => l.account === ACCOUNTS.deferredDebit).credit, -lon.deferredCents); // flipped
-  assert.ok(d.checks.filter((c) => ['D2', 'D3', 'D4'].includes(c.id)).every((c) => c.pass));
-  assert.ok(d.checks.find((c) => c.id === 'D1' && c.location === CHI).pass);
+  assert.ok(d.checks.filter((c) => ['D3', 'D4'].includes(c.id)).every((c) => c.pass));
+  assert.ok(!d.figures.some((f) => f.location === 'Austin Tours')); // no class – not posted
 
   assert.throws(
-    () => buildDeferredJournal({ month: '2026-08', xola: x, earnings, rates: RATES, files: FILES, options: { deferredReversal: 'flag' } }),
+    () => buildDeferredJournal({ month: '2026-08', cashFlow, earnings, rates: RATES, files: FILES, options: { deferredReversal: 'flag' } }),
     /never/
   );
+});
+
+test('DEF: companies sharing a class are added into one pair of lines', () => {
+  const cf = (name, gross) => ({ sellerName: name, rows: parse(workbook([tx({ gross, processingFee: 0, serviceFee: 0, net: gross })])).rows });
+  const d = buildDeferredJournal({
+    month: '2026-09',
+    cashFlow: [cf('Tours of NYC', 100), cf('ToursOfNYC', 50)],
+    earnings: [cf('Tours of NYC', 30)],
+    files: [],
+  });
+  const nyc = d.lines.filter((l) => l.class === 'NYC');
+  assert.equal(nyc.length, 2);
+  assert.equal(nyc.find((l) => l.account === ACCOUNTS.deferredDebit).debit, 12000);
 });
 
 // ---- Viator ----------------------------------------------------------------------------------

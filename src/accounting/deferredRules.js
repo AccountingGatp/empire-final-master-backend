@@ -30,7 +30,7 @@ function kind(row, recognizedFile) {
 
 // USD for a row. Exact stored rate when there is one; otherwise the nearest
 // stored rate for the same location + currency (flagged as approximate).
-function makeConverter(rates) {
+export function makeConverter(rates) {
   const exact = new Map();
   const byLoc = new Map();
   for (const r of rates || []) {
