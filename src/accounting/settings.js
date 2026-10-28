@@ -111,12 +111,13 @@ export const OPTIONS = {
   // (Method "Electronic") count, others (Method "Other") are left out like unpaid
   // office bookings; or 'include' / 'exclude' every office row. Check against the
   // known Deferred totals (D5) and change if the Controller decides otherwise.
-  // Viator (Controller decision, Oct 2026): post Xola's Source = viator rows in
-  // the XOLA journal like Groupon / GYG / Airbnb — Dr 10032 Viator Sales clearing
-  // (net), fees and gross with the rest. The Viator advice (step 6) is then used
-  // to CHECK the clearing, not posted again (no VIA lines, so no double count).
-  // false = SOP Part B: leave Viator out of XOLA and post it from the advice.
-  viatorInXola: true,
+  // Viator: Xola's Cash Flow report also contains Viator sales, but Viator is
+  // entered from the Viator portal reports (advice per entity), so those rows are
+  // NOT part of the XOLA sales entry. false (current) = SOP Part B: leave Viator
+  // out of XOLA and post it from the advice in the VIA journal; the Source table
+  // still shows how many Viator sales were left out. true = post Xola's Viator rows
+  // in the XOLA journal (10032 Viator Sales) and use the advice only as a check.
+  viatorInXola: false,
 
   // FX (Controller decision, Oct 2026): fill every empty rate automatically with
   // the ECB rate for that payout date (frankfurter.dev). Anyone can still open
