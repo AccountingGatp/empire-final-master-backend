@@ -5,6 +5,8 @@ import * as xola from './xola.js';
 import * as storage from './storage.js';
 import { checkReportDetails } from '../accounting/workbook.js';
 import { OPTIONS } from '../accounting/settings.js';
+import * as journals from './journals.js';
+import { generateRunSummaries } from './summary.js';
 
 // Cash Flow, Payout and Recognized Earnings, per seller.
 const REPORT_TYPES = ['account', 'payout', 'earnings'];
@@ -151,6 +153,24 @@ async function refreshRunCounts(runId) {
   return { done, failed, total };
 }
 
+// Everything that is safe to do without a person once the downloads have
+// settled: work out the FX rates (ECB rates are filled in automatically) and
+// build the combined Summary workbooks. Journals, Viator advices, accepting
+// check differences and the checks file stay manual on purpose. Never throws.
+async function autoFollowUps(runId) {
+  try {
+    if (!(await FileTask.exists({ run: runId, status: 'done' }))) return;
+    try {
+      await journals.scanFxRates(runId);
+    } catch (err) {
+      console.warn('[auto] fx scan skipped:', err.message);
+    }
+    await generateRunSummaries(runId);
+  } catch (err) {
+    console.error('[auto] follow-ups failed', err);
+  }
+}
+
 // Process an entire run in the background. Never throws to the caller.
 async function processRun(runId) {
   const run = await Run.findById(runId);
@@ -203,6 +223,7 @@ async function processRun(runId) {
     run.phase = 'done';
     run.status = failed > 0 ? 'completed_with_errors' : 'completed';
     await run.save();
+    await autoFollowUps(run._id);
   } catch (err) {
     run.status = 'failed';
     run.phase = 'done';
@@ -242,6 +263,7 @@ async function retryTask(taskId) {
     run.status = stillFailed > 0 ? 'completed_with_errors' : 'completed';
     run.phase = 'done';
     await run.save();
+    autoFollowUps(run._id);
   }
 
   return FileTask.findById(taskId);
@@ -293,6 +315,7 @@ async function addReportType(runId, type) {
         phase: 'done',
         status: failed > 0 ? 'completed_with_errors' : 'completed',
       });
+      await autoFollowUps(run._id);
     }
   })().catch((err) => console.error('[addReportType] fatal', err));
 
