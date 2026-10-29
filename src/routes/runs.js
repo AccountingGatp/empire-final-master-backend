@@ -16,7 +16,7 @@ import {
   OPTIONS,
   NAMES,
 } from '../accounting/settings.js';
-import { AUTO_FETCH_AVAILABLE } from '../accounting/viator.js';
+import { VIATOR_ACCOUNTS } from '../accounting/settings.js';
 
 const router = express.Router();
 
@@ -49,7 +49,7 @@ async function serializeRun(run) {
     attempts: t.attempts,
     error: t.error,
     reportCheck: t.reportCheck || null,
-    parsed: t.parsed ? { ...t.parsed, rows: undefined } : null,
+    parsed: t.parsed ? { ...t.parsed, rows: undefined, bookings: undefined } : null,
     updatedAt: t.updatedAt,
   });
   const shapeSummary = (s) => ({
@@ -111,6 +111,8 @@ async function serializeRun(run) {
       office: shapeJournal(run.journals?.office),
       deferred: shapeJournal(run.journals?.deferred),
       viator: shapeJournal(run.journals?.viator),
+      viatorDef: shapeJournal(run.journals?.viatorDef),
+      viatorWork: shapeJournal(run.journals?.viatorWork),
       checks: shapeJournal(run.journals?.checks),
     },
   };
@@ -347,9 +349,23 @@ router.get('/settings', (_req, res) => {
     fxLimits: FX_LIMITS,
     options: OPTIONS,
     names: NAMES,
-    viatorAutoFetch: AUTO_FETCH_AVAILABLE,
+    viatorAccounts: VIATOR_ACCOUNTS.map((a) => ({ id: a.id, label: a.label, location: a.location, currency: a.currency })),
   });
 });
+
+// GET /api/viator/prices -> status of the product commission sheet.
+router.get('/viator/prices', handle(async (_req, res) => res.json(await journals.viatorPriceInfo())));
+
+// POST /api/viator/prices?fileName=<name>   Body: the raw sheet (xlsx / csv).
+router.post(
+  '/viator/prices',
+  express.raw({ type: () => true, limit: '4mb' }),
+  handle(async (req, res) => {
+    const fileName = String(req.query.fileName || 'viator-prices.xlsx');
+    const buffer = Buffer.isBuffer(req.body) ? req.body : Buffer.alloc(0);
+    res.status(201).json(await journals.saveViatorPrices({ fileName, buffer }, userOf(req)));
+  })
+);
 
 // POST /api/runs/:id/fx/scan -> work out which FX rates the files need.
 router.post(
@@ -383,9 +399,10 @@ const BUILDERS = {
   xola: journals.buildXola,
   deferred: journals.buildDeferred,
   viator: journals.buildViator,
+  viatorDef: journals.buildViator, // one build makes both Viator journals
 };
 
-// POST /api/runs/:id/journals/:key/build   (key = xola | deferred | viator)
+// POST /api/runs/:id/journals/:key/build   (key = xola | deferred | viator; viator also builds the deferred one)
 router.post(
   '/runs/:id/journals/:key/build',
   handle(async (req, res) => {
@@ -426,7 +443,7 @@ router.get(
   '/runs/:id/journals/:key/file',
   handle(async (req, res) => {
     const { id, key } = req.params;
-    if (!['xola', 'office', 'deferred', 'viator', 'checks'].includes(key)) {
+    if (!['xola', 'office', 'deferred', 'viator', 'viatorDef', 'viatorWork', 'checks'].includes(key)) {
       return res.status(400).json({ error: 'unknown journal' });
     }
     const run = await Run.findById(id);
@@ -442,17 +459,16 @@ router.get(
   })
 );
 
-// POST /api/runs/:id/viator?location=<company>&fileName=<name>
-// Body: the raw advice file (Content-Type: application/octet-stream).
+// POST /api/runs/:id/viator?fileName=<name>
+// Body: one Viator file, or a .zip of them (Content-Type: application/octet-stream).
 router.post(
   '/runs/:id/viator',
   express.raw({ type: () => true, limit: '4mb' }),
   handle(async (req, res) => {
-    const location = String(req.query.location || '');
-    const fileName = String(req.query.fileName || 'advice.csv');
+    const fileName = String(req.query.fileName || 'viator.csv');
     const buffer = Buffer.isBuffer(req.body) ? req.body : Buffer.alloc(0);
-    await journals.uploadViatorAdvice(req.params.id, { location, fileName, buffer }, userOf(req));
-    res.status(201).json(await serializeRun(await Run.findById(req.params.id)));
+    const result = await journals.uploadViatorFiles(req.params.id, { fileName, buffer }, userOf(req));
+    res.status(201).json({ ...result, run: await serializeRun(await Run.findById(req.params.id)) });
   })
 );
 

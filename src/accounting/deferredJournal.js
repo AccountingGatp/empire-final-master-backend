@@ -7,7 +7,8 @@
 //                         "Previously Collected - Gross" + "Collected In Period - Gross"
 //   Deferred            = Cash Flow − Recognized Earnings   (gross, not net)
 //
-// All rows count — no Source exclusions. Works the same for every month; no
+// Every row counts, except Viator rows when OPTIONS.viatorDeferredSeparate is on
+// (Source or Tags contains "Viator"): those are in the Viator deferred journal. Works the same for every month; no
 // month figures are stored in the app.
 // Posted ONE pair of lines per CLASS (companies sharing a class are added up):
 //   Dr 40001.1 Sales Revenue - Deferred / Cr 22001 Deferred Revenue
@@ -49,11 +50,17 @@ export function buildDeferredJournal({ month, cashFlow = [], earnings = [], rate
   const figures = [];
   const missingRates = new Set();
   let approxRows = 0;
+  let viatorRowsLeftOut = 0;
 
   // Gross of a file in USD (all rows).
   const grossUsd = (file, location, recognized) => {
     let total = 0;
     for (const r of file?.rows || []) {
+      // Viator has its own deferred working (built from Viator's reports): leave its rows out here.
+      if (options.viatorDeferredSeparate && r.viator) {
+        viatorRowsLeftOut++;
+        continue;
+      }
       const date = recognized ? '' : r.payoutDate;
       const c = convert(location, r.currency, date, r.gross);
       if (c.usd === null) {
@@ -122,5 +129,15 @@ export function buildDeferredJournal({ month, cashFlow = [], earnings = [], rate
     );
   }
 
-  return { ...meta, lines, figures, classes: [...byClass.values()], totalDeferredCents: total, checks };
+  if (options.viatorDeferredSeparate) {
+    checks.push(
+      C.result('D8', 'ALL', 'Viator rows (Source or Tags) left out of the Xola deferred working', 'left out', 'left out', {
+        unit: 'text',
+        pass: true,
+        note: `${viatorRowsLeftOut} Viator row(s) in the Cash Flow and Recognized Earnings files were not counted — they are in the Viator deferred journal.`,
+      })
+    );
+  }
+
+  return { ...meta, viatorRowsLeftOut, lines, figures, classes: [...byClass.values()], totalDeferredCents: total, checks };
 }

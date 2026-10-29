@@ -109,7 +109,7 @@ const fxRateSchema = new mongoose.Schema(
 // A failed check someone accepted by typing a reason.
 const acceptedDiffSchema = new mongoose.Schema(
   {
-    journal: String, // xola | deferred | viator
+    journal: String, // xola | deferred | viator | viatorDef
     checkId: String,
     location: String,
     diff: mongoose.Schema.Types.Mixed,
@@ -166,7 +166,9 @@ const runSchema = new mongoose.Schema(
       xola: { type: journalSchema, default: () => ({}) },
       office: { type: journalSchema, default: () => ({}) },
       deferred: { type: journalSchema, default: () => ({}) },
-      viator: { type: journalSchema, default: () => ({}) },
+      viator: { type: journalSchema, default: () => ({}) }, // Viator sales + commission JE
+      viatorDef: { type: journalSchema, default: () => ({}) }, // Viator deferred revenue JE
+      viatorWork: { type: journalSchema, default: () => ({}) }, // Viator workings (detail + exceptions)
       checks: { type: journalSchema, default: () => ({}) }, // CHECKS-YYYY-MM.xlsx
     },
 

@@ -37,17 +37,72 @@ const buf = async (wb) => Buffer.from(await wb.xlsx.writeBuffer());
 const money = (c) => (c ? fromCents(c) : null);
 
 // QBO / SaasAnt journal import: *JournalNo, *JournalDate, *AccountName, *Debits, *Credits, Description, Class
-export async function writeJournalXlsx(lines) {
+// With { extended: true } (Viator JEs, SOP section 4) the layout is
+// *JournalNo, *JournalDate, *AccountName, *Debits, *Credits, Description, Name, Currency, Location, Class.
+// No total row in the import file.
+export async function writeJournalXlsx(lines, { extended = false } = {}) {
   const wb = book();
   const ws = sheet(
     wb,
     'Journal Entry',
-    ['*JournalNo', '*JournalDate', '*AccountName', '*Debits', '*Credits', 'Description', 'Class'],
-    [16, 13, 44, 14, 14, 52, 38]
+    extended
+      ? ['*JournalNo', '*JournalDate', '*AccountName', '*Debits', '*Credits', 'Description', 'Name', 'Currency', 'Location', 'Class']
+      : ['*JournalNo', '*JournalDate', '*AccountName', '*Debits', '*Credits', 'Description', 'Class'],
+    extended ? [16, 13, 44, 14, 14, 52, 14, 10, 14, 38] : [16, 13, 44, 14, 14, 52, 38]
   );
   for (const l of lines) {
-    addRow(ws, [l.journalNo, l.journalDate, l.account, money(l.debit), money(l.credit), l.description, l.class], [4, 5]);
+    const head = [l.journalNo, l.journalDate, l.account, money(l.debit), money(l.credit), l.description];
+    addRow(ws, extended ? [...head, l.name || '', l.currency || 'USD', '', l.class] : [...head, l.class], [4, 5]);
   }
+  return buf(wb);
+}
+
+// Viator workings: summary per location, every booking with its price / status /
+// payout result, the Exceptions list and the deferred working (SOP sections 3, 5).
+export async function writeViatorWorkingsXlsx({ month, locations, detail, exceptions }) {
+  const wb = book();
+  const pct = (v) => (v === null || v === undefined ? null : Math.round(v * 10000) / 10000);
+
+  const s = sheet(
+    wb,
+    'Summary',
+    ['Location', 'Class', 'Currency', 'Bookings (booked in month)', 'Sales (local)', 'Net (local)', 'Commission (local)', 'Commission %', 'Rate to USD', 'Sales (USD)', 'Commission (USD)', 'Unpriced bookings'],
+    [32, 30, 9, 14, 15, 15, 16, 12, 11, 15, 16, 12]
+  );
+  for (const l of locations) {
+    addRow(s, [l.location, l.class, l.currency, l.bookings, fromCents(l.salesLocalCents), fromCents(l.netLocalCents), fromCents(l.commissionLocalCents), pct(l.commissionPct), l.rate, fromCents(l.salesCents), fromCents(l.commissionCents), l.unpriced], [5, 6, 7, 10, 11]);
+  }
+  addRow(s, ['Total (USD)', '', '', '', '', '', '', '', '', fromCents(locations.reduce((a, l) => a + l.salesCents, 0)), fromCents(locations.reduce((a, l) => a + l.commissionCents, 0)), ''], [10, 11]);
+
+  const d = sheet(
+    wb,
+    'Deferred working',
+    ['Location', 'Currency', `Cash Flow = Sales by booking month ${month}`, `Reco Ear = Sales by travel month ${month}`, 'Deferred (local)', 'Deferred (USD)'],
+    [32, 9, 24, 24, 16, 16]
+  );
+  for (const l of locations) {
+    addRow(d, [l.location, l.currency, fromCents(l.cashFlowLocalCents), fromCents(l.recognizedLocalCents), fromCents(l.deferredLocalCents), fromCents(l.deferredCents)], [3, 4, 5, 6]);
+  }
+
+  const b = sheet(
+    wb,
+    'Bookings',
+    ['Location', 'Booking ref', 'Booking date', 'Travel date', 'Status', 'Source', 'Product code', 'Tour grade', 'Adults', 'Seniors', 'Youths', 'Children', 'Infants', 'Viator gross', 'Report net', 'Paid by Viator', 'Sales', 'Net', 'Commission', 'Rule applied'],
+    [30, 16, 12, 12, 11, 12, 14, 14, 7, 7, 7, 8, 7, 12, 12, 12, 12, 12, 12, 46]
+  );
+  for (const r of detail) {
+    addRow(
+      b,
+      [r.location, r.ref, r.bookingDate, r.travelDate, r.status, r.source, r.productCode, r.tourGrade, r.adults, r.seniors, r.youths, r.children, r.infants, r.grossCents === null ? null : fromCents(r.grossCents), fromCents(r.reportNetCents ?? 0), r.hasPayout ? fromCents(r.paidCents) : null, fromCents(r.salesCents ?? 0), fromCents(r.netCents ?? 0), fromCents(r.commissionCents ?? 0), r.rule],
+      [14, 15, 16, 17, 18, 19]
+    );
+  }
+
+  const e = sheet(wb, 'Exceptions', ['Location', 'Booking ref', 'Kind', 'What', 'Net', 'Price the net implies'], [30, 16, 11, 90, 12, 18]);
+  for (const x of exceptions) {
+    addRow(e, [x.location, x.ref, x.kind, x.detail, x.net === undefined ? null : fromCents(x.net), x.impliedGross ? fromCents(x.impliedGross) : null], [5, 6]);
+  }
+  if (!exceptions.length) addRow(e, ['None.']);
   return buf(wb);
 }
 

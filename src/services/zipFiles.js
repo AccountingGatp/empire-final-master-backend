@@ -71,7 +71,7 @@ async function buildRunZip(runId) {
     }
   }
 
-  for (const key of ['xola', 'office', 'deferred', 'viator', 'checks']) {
+  for (const key of ['xola', 'office', 'deferred', 'viator', 'viatorDef', 'viatorWork', 'checks']) {
     const j = run.journals?.[key];
     if (j?.status === 'ready' && !j.stale && j.storageKey) {
       if (await tryAddFromKey(zip, 'journals', j.fileName, j.storageKey, used)) fileCount++;

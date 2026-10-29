@@ -41,6 +41,15 @@ function rateOnOrBefore(series, date) {
   return hit;
 }
 
+// Average of the daily rates inside `month` ('YYYY-MM'); falls back to the last
+// rate before the month when the ECB published nothing inside it.
+function averageInMonth(series, month) {
+  const inMonth = series.filter(([d]) => d.slice(0, 7) === month).map(([, r]) => r);
+  if (inMonth.length) return { rate: inMonth.reduce((a, b) => a + b, 0) / inMonth.length, date: `${month} average` };
+  const before = series.filter(([d]) => d.slice(0, 7) < month).pop();
+  return before ? { rate: before[1], date: before[0] } : null;
+}
+
 /**
  * Suggestions for the run's rate table.
  * Rows with no payout date use the last day of the month.
@@ -58,15 +67,27 @@ export async function suggestRates(run) {
   const suggestions = [];
   const problems = [];
   for (const [currency, list] of byCurrency) {
-    const dates = list.map((r) => r.lookup).sort();
+    const isAvg = (r) => /monthly average/i.test(r.label || '');
+    const month = String(run.to || '').slice(0, 7);
+    const dates = list.map((r) => (isAvg(r) ? `${month}-01` : r.lookup)).sort();
+    const lastDate = list.some(isAvg) ? [...dates, run.to].sort().pop() : dates[dates.length - 1];
     let series;
     try {
-      series = await fetchSeries(currency, dates[0], dates[dates.length - 1]);
+      series = await fetchSeries(currency, dates[0], lastDate);
     } catch (err) {
       problems.push(`${currency}: ${err.message}`);
       continue;
     }
     for (const r of list) {
+      if (isAvg(r)) {
+        const avg = averageInMonth(series, month);
+        if (!avg) {
+          problems.push(`${r.location} · ${currency} · monthly average: no ECB rates for ${month}`);
+          continue;
+        }
+        suggestions.push({ location: r.location, currency, date: r.date || '', rate: Number(avg.rate.toFixed(4)), rateDate: avg.date });
+        continue;
+      }
       const hit = rateOnOrBefore(series, r.lookup);
       if (!hit) {
         problems.push(`${r.location} · ${currency} · ${r.date || 'no payout date'}: no ECB rate on or before ${r.lookup}`);

@@ -6,12 +6,28 @@ import { OPTIONS, nameFor } from '../accounting/settings.js';
 import { readWorkbook, parseTransactions, parseSummaryTotals, checkReportDetails } from '../accounting/workbook.js';
 import { buildXolaJournal, neededRates } from '../accounting/xolaJournal.js';
 import { buildDeferredJournal } from '../accounting/deferredJournal.js';
-import { buildViatorJournal, neededViatorRates, parseAdvice, homeCurrency } from '../accounting/viator.js';
+import {
+  accountFromName,
+  buildViatorSop,
+  fileKind,
+  neededViatorSopRates,
+  parseBookingsCsv,
+  parsePayoutAdvice,
+  parsePriceSheet,
+} from '../accounting/viatorSop.js';
+import ViatorPrices from '../models/ViatorPrices.js';
+import JSZip from 'jszip';
+import crypto from 'crypto';
+import fs from 'fs';
+
+// The product commission sheet that ships with the app (read from the Viator portal
+// screenshots). An uploaded sheet replaces it.
+const DEFAULT_PRICES = JSON.parse(fs.readFileSync(new URL('../data/viatorPrices.default.json', import.meta.url), 'utf8'));
 import { mergeRateTable, rateKey, rateProblem } from '../accounting/fx.js';
 import { journalStatus } from '../accounting/checks.js';
 import { suggestRates } from './fxRates.js';
 import { previousMonth } from '../accounting/money.js';
-import { writeJournalXlsx, writeOfficeXlsx, writeChecksXlsx } from '../accounting/output.js';
+import { writeJournalXlsx, writeOfficeXlsx, writeChecksXlsx, writeViatorWorkingsXlsx } from '../accounting/output.js';
 
 // Every function here is ONE short request (Vercel-safe): read the run's files
 // from B2, compute, write the result to B2 + Mongo, return.
@@ -24,7 +40,7 @@ export class UserError extends Error {
   }
 }
 
-const JOURNAL_KEYS = ['xola', 'deferred', 'viator'];
+const JOURNAL_KEYS = ['xola', 'deferred', 'viator', 'viatorDef'];
 const sum = (arr, f) => arr.reduce((s, x) => s + (f(x) || 0), 0);
 
 async function getRun(runId) {
@@ -148,16 +164,27 @@ async function verifyUncheckedFiles(run, tasks) {
 
 const doneTasks = (tasks, type) => tasks.filter((t) => t.type === type && t.status === 'done' && t.storageKey);
 
-function advicesFrom(tasks) {
-  return tasks
-    .filter((t) => t.type === 'viator' && t.status === 'done' && t.parsed)
-    .map((t) => ({
-      id: String(t._id),
-      location: t.sellerName,
-      fileName: t.fileName,
-      paymentDate: t.parsed.paymentDate || '',
-      rows: t.parsed.rows || [],
-    }));
+// The Viator files uploaded for the run, grouped per supplier account.
+function viatorAccountsFrom(tasks) {
+  const by = new Map();
+  for (const t of tasks) {
+    if (t.type !== 'viator' || t.status !== 'done' || !t.parsed?.account) continue;
+    const acc = by.get(t.parsed.account) || { id: t.parsed.account, bookingFiles: [], payoutFiles: [] };
+    by.set(t.parsed.account, acc);
+    if (t.parsed.kind === 'bookings') {
+      acc.bookingFiles.push({ fileName: t.fileName, basis: t.parsed.basis, month: t.parsed.month, bookings: t.parsed.bookings || [], warnings: t.parsed.warnings || [] });
+    } else if (t.parsed.kind === 'payout') {
+      acc.payoutFiles.push({
+        fileName: t.fileName,
+        paymentDate: t.parsed.paymentDate || '',
+        rows: t.parsed.rows || [],
+        declaredCents: t.parsed.declaredCents ?? null,
+        sumCents: t.parsed.sumCents ?? 0,
+        problems: t.parsed.problems || [],
+      });
+    }
+  }
+  return [...by.values()];
 }
 
 // ---- FX rate table ------------------------------------------------------------
@@ -172,7 +199,7 @@ export async function scanFxRates(runId) {
   const needed = [
     ...neededRates(account, 'xola'),
     ...neededRates(earnings, 'earnings'),
-    ...neededViatorRates(advicesFrom(tasks)),
+    ...neededViatorSopRates(viatorAccountsFrom(tasks)),
   ];
   run.fxRates = mergeRateTable(run.fxRates.map((r) => r.toObject?.() || r), needed);
   run.fxScannedAt = new Date();
@@ -271,7 +298,7 @@ export async function saveFxRates(runId, entries, user) {
   const affected = new Set();
   if (changedSources.has('xola')) ['xola', 'deferred'].forEach((k) => affected.add(k));
   if (changedSources.has('earnings')) affected.add('deferred');
-  if (changedSources.has('viator')) affected.add('viator');
+  if (changedSources.has('viator')) ['viator', 'viatorDef'].forEach((k) => affected.add(k));
   if (affected.size) markStale(run, [...affected], 'FX rates changed since this was built');
   await run.save();
   if (problems.length) throw new UserError(`Some rates were not saved:\n${problems.join('\n')}`, 422, problems);
@@ -434,7 +461,7 @@ export async function buildXola(runId, user) {
       },
     });
     applyStatus(run, 'xola');
-    markStale(run, ['deferred', 'viator'], 'the XOLA journal was rebuilt after this');
+    markStale(run, ['deferred'], 'the XOLA journal was rebuilt after this');
 
     run.journals.office = {
       status: 'ready',
@@ -508,58 +535,90 @@ export async function buildDeferred(runId, user) {
   return run;
 }
 
-// Step 6: VIA journal.
+// Step 6: Viator journals — sales + commission (VIA) and deferred (DEFV) — and the
+// workings file, all from the uploaded Viator reports + the product commission sheet.
 export async function buildViator(runId, user) {
   const run = await getRun(runId);
   const tasks = await plainTasks(runId);
-  const advices = advicesFrom(tasks);
-  if (!advices.length) throw new UserError('upload at least one Viator payment advice first');
+  const accounts = viatorAccountsFrom(tasks);
+  if (!accounts.some((a) => a.bookingFiles.length)) {
+    throw new UserError('Upload the Viator bookings reports and payment advices first.');
+  }
+  const priceDoc = (await ViatorPrices.findOne({ name: 'current' }).lean()) || DEFAULT_PRICES;
 
-  // Last month's advices, for "every entity that had an advice last month has one".
-  const prevMonth = previousMonth(run.month);
-  const prevRuns = await Run.find({ month: prevMonth }).select('_id').lean();
-  const prevAdvices = prevRuns.length
-    ? await FileTask.find({ run: { $in: prevRuns.map((r) => r._id) }, type: 'viator', status: 'done' }).lean()
-    : [];
-  const previous = {
-    hadRun: prevAdvices.length > 0,
-    locations: [...new Set(prevAdvices.map((t) => t.sellerName))],
-  };
+  // London is in GBP: its monthly average rate goes into the FX table (ECB, editable in step 3).
+  const added = addMissingRates(run, neededViatorSopRates(accounts));
+  const filled = await autoFillEcbRates(run);
+  if (added || filled) await run.save();
 
-  await autoFillEcbRates(run);
   run.journals.viator.status = 'generating';
+  run.journals.viator.error = null;
+  run.journals.viatorDef.status = 'generating';
+  run.journals.viatorDef.error = null;
   await run.save();
 
   let built;
   try {
-    const x = run.journals.xola;
-    built = buildViatorJournal({
+    built = buildViatorSop({
       month: run.month,
-      advices,
+      accounts,
+      prices: priceDoc.rows,
       rates: run.fxRates.map((r) => r.toObject()),
-      xola: x && ['ready', 'blocked'].includes(x.status) ? { locations: x.locations } : null,
-      previous,
       options: OPTIONS,
     });
   } catch (err) {
+    run.journals.viatorDef.status = 'failed';
+    run.journals.viatorDef.error = err.message;
+    run.journals.viatorDef.generatedAt = new Date();
     return failJournal(run, 'viator', err);
   }
 
-  const fileName = `${nameFor('viator', run.month)}.xlsx`;
-  const key = `runs/${runId}/journals/${fileName}`;
+  const files = {
+    viator: `${nameFor('viator', run.month)}.xlsx`,
+    viatorDef: `${nameFor('viatorDef', run.month)}.xlsx`,
+    viatorWork: `${nameFor('viatorWork', run.month)}.xlsx`,
+  };
+  const keys = Object.fromEntries(Object.entries(files).map(([k, f]) => [k, `runs/${runId}/journals/${f}`]));
   try {
-    await storage.putObject(key, await writeJournalXlsx(built.lines));
+    await storage.putObject(keys.viator, await writeJournalXlsx(built.via.lines, { extended: true }));
+    await storage.putObject(keys.viatorDef, await writeJournalXlsx(built.def.lines, { extended: true }));
+    await storage.putObject(
+      keys.viatorWork,
+      await writeViatorWorkingsXlsx({ month: run.month, locations: built.locations, detail: built.detail, exceptions: built.exceptions })
+    );
   } catch (err) {
+    run.journals.viatorDef.status = 'failed';
+    run.journals.viatorDef.error = err.message;
     return failJournal(run, 'viator', err);
   }
-  run.journals.viator = journalRecord(built, {
-    fileName,
-    storageKey: key,
+
+  const bookingCount = built.detail.length;
+  run.journals.viator = journalRecord(built.via, {
+    fileName: files.viator,
+    storageKey: keys.viator,
     user,
-    checks: built.checks,
-    extra: { figures: built.figures, rowCount: advices.reduce((s, a) => s + a.rows.length, 0) },
+    checks: built.via.checks,
+    extra: { figures: built.via.figures, rowCount: bookingCount },
   });
+  run.journals.viatorDef = journalRecord(built.def, {
+    fileName: files.viatorDef,
+    storageKey: keys.viatorDef,
+    user,
+    checks: built.def.checks,
+    extra: { figures: built.def.figures, rowCount: bookingCount },
+  });
+  run.journals.viatorWork = {
+    status: 'ready',
+    journalNo: nameFor('viatorWork', run.month),
+    fileName: files.viatorWork,
+    storageKey: keys.viatorWork,
+    rowCount: built.exceptions.length, // the number shown is the exceptions count
+    lineCount: bookingCount,
+    generatedAt: new Date(),
+    builtBy: user,
+  };
   applyStatus(run, 'viator');
+  applyStatus(run, 'viatorDef');
   await run.save();
   return run;
 }
@@ -624,55 +683,142 @@ export async function buildChecksFile(runId, user) {
 
 const safe = (s) => String(s || 'file').replace(/[\\/?*[\]:<>|"]/g, '_').replace(/\s+/g, '_').slice(0, 120);
 
-export async function uploadViatorAdvice(runId, { location, fileName, buffer }, user) {
-  const run = await getRun(runId);
-  if (!location) throw new UserError('pick the location this advice belongs to', 400);
-  if (!buffer?.length) throw new UserError('the uploaded file is empty', 400);
+const contentHash = (rows) => crypto.createHash('sha1').update(JSON.stringify(rows)).digest('hex');
+
+// One Viator file (a bookings CSV or a payment advice) for one of the six accounts.
+async function storeViatorFile(run, path, buffer, user) {
+  const base = String(path).split(/[\\/]/).pop();
+  const kind = fileKind(base);
+  if (!kind) return { skipped: true, reason: 'not a Viator bookings CSV or payment advice' };
+  const acc = accountFromName(path);
+  if (!acc) return { skipped: true, reason: 'not one of the six Viator accounts shown here' };
 
   let parsed;
   try {
-    parsed = parseAdvice(buffer, fileName, { defaultCurrency: homeCurrency(location), defaultEntity: location });
+    parsed = kind === 'bookings' ? parseBookingsCsv(buffer, base) : parsePayoutAdvice(buffer, base, acc.currency);
   } catch (err) {
-    throw new UserError(`Could not read ${fileName}: ${err.message}`, 422);
+    return { skipped: true, reason: err.message };
   }
 
-  const key = `runs/${run._id}/viator/${safe(location)}/${Date.now()}_${safe(fileName)}`;
-  const type = /\.csv$/i.test(fileName) ? 'text/csv' : storage.XLSX_CONTENT_TYPE;
-  await storage.putObject(key, buffer, type);
+  const existing = await FileTask.find({ run: run._id, type: 'viator', 'parsed.account': acc.id }).lean();
+  // The same file uploaded again replaces the old copy.
+  const same = existing.filter((t) => t.fileName === base);
+  // A payment advice with identical content under another name is a duplicate.
+  if (kind === 'payout') {
+    const h = contentHash(parsed.rows);
+    const dup = existing.find((t) => t.parsed?.kind === 'payout' && t.fileName !== base && t.parsed.hash === h);
+    if (dup) return { skipped: true, reason: `same payments as ${dup.fileName} — ignored so nothing is counted twice` };
+    parsed.hash = h;
+  }
+  for (const t of same) await FileTask.deleteOne({ _id: t._id });
 
-  const currencies = [...new Set(parsed.rows.map((r) => r.currency))];
-  const task = await FileTask.create({
+  const key = `runs/${run._id}/viator/${acc.id}/${Date.now()}_${safe(base)}`;
+  await storage.putObject(key, buffer, kind === 'bookings' ? 'text/csv' : storage.XLSX_CONTENT_TYPE);
+
+  const common = { kind, account: acc.id, label: acc.label, uploadedBy: user, warnings: parsed.warnings || parsed.problems || [] };
+  const meta =
+    kind === 'bookings'
+      ? {
+          ...common,
+          basis: parsed.basis,
+          month: parsed.month,
+          rowCount: parsed.bookings.length,
+          currency: [...new Set(parsed.bookings.map((b) => b.currency))].join('/'),
+          totalCents: sum(parsed.bookings, (b) => b.netCents),
+          bookingRange: parsed.bookings.length ? [parsed.bookings.reduce((m, b) => (b.bookingDate < m ? b.bookingDate : m), '9999'), parsed.bookings.reduce((m, b) => (b.bookingDate > m ? b.bookingDate : m), '')] : null,
+          bookings: parsed.bookings,
+        }
+      : {
+          ...common,
+          paymentDate: parsed.paymentDate,
+          rowCount: parsed.rows.length,
+          currency: [...new Set(parsed.rows.map((r) => r.currency))].join('/') || acc.currency,
+          totalCents: parsed.sumCents,
+          declaredCents: parsed.declaredCents,
+          sumCents: parsed.sumCents,
+          problems: parsed.problems,
+          hash: parsed.hash,
+          rows: parsed.rows,
+        };
+  await FileTask.create({
     run: run._id,
-    sellerId: `viator:${location}`,
-    sellerName: location,
+    sellerId: `viator:${acc.id}:${base}`,
+    sellerName: acc.location,
     type: 'viator',
     status: 'done',
-    fileName,
+    fileName: base,
     storageKey: key,
     sizeBytes: buffer.length,
     attempts: 1,
-    parsed: {
-      parser: parsed.parser,
-      paymentDate: parsed.paymentDate,
-      rowCount: parsed.rows.length,
-      currency: currencies.join('/'),
-      totalCents: sum(parsed.rows, (r) => r.netCents),
-      warnings: parsed.warnings,
-      uploadedBy: user,
-      rows: parsed.rows,
-    },
+    parsed: meta,
   });
-  // Uploading changes what the Viator journal would contain.
-  markStale(run, ['viator'], 'advices changed since this was built');
-  await run.save();
-  return task;
+  return { skipped: false, fileName: base, account: acc.label, kind, rows: meta.rowCount, replaced: same.length > 0 };
+}
+
+// Upload one file, or a .zip holding many (e.g. the "empire sales" folder).
+export async function uploadViatorFiles(runId, { fileName, buffer }, user) {
+  const run = await getRun(runId);
+  if (!buffer?.length) throw new UserError('the uploaded file is empty', 400);
+
+  const entries = [];
+  if (/\.zip$/i.test(fileName || '')) {
+    let zip;
+    try {
+      zip = await JSZip.loadAsync(buffer);
+    } catch {
+      throw new UserError(`${fileName} is not a readable zip file`, 422);
+    }
+    for (const [path, entry] of Object.entries(zip.files)) {
+      if (entry.dir || /(^|\/)(__MACOSX|\.)/.test(path)) continue;
+      entries.push({ path, buffer: await entry.async('nodebuffer') });
+    }
+  } else {
+    entries.push({ path: fileName, buffer });
+  }
+
+  const added = [];
+  const skipped = [];
+  for (const e of entries) {
+    const r = await storeViatorFile(run, e.path, e.buffer, user);
+    if (r.skipped) skipped.push({ fileName: e.path, reason: r.reason });
+    else added.push(r);
+  }
+  if (added.length) {
+    markStale(run, ['viator', 'viatorDef'], 'Viator files changed since this was built');
+    await run.save();
+  }
+  return { added, skipped };
 }
 
 export async function deleteViatorAdvice(runId, taskId) {
   const task = await FileTask.findOne({ _id: taskId, run: runId, type: 'viator' });
-  if (!task) throw new UserError('advice not found', 404);
+  if (!task) throw new UserError('file not found', 404);
   await task.deleteOne();
   const run = await getRun(runId);
-  markStale(run, ['viator'], 'advices changed since this was built');
+  markStale(run, ['viator', 'viatorDef'], 'Viator files changed since this was built');
   await run.save();
+}
+
+// ---- Viator product commission sheet ----------------------------------------------------
+
+export async function saveViatorPrices({ fileName, buffer }, user) {
+  if (!buffer?.length) throw new UserError('the uploaded file is empty', 400);
+  let parsed;
+  try {
+    parsed = parsePriceSheet(buffer, fileName);
+  } catch (err) {
+    throw new UserError(`Could not read ${fileName}: ${err.message}`, 422);
+  }
+  await ViatorPrices.findOneAndUpdate(
+    { name: 'current' },
+    { name: 'current', fileName, uploadedBy: user, rows: parsed.rows },
+    { upsert: true, new: true }
+  );
+  return viatorPriceInfo();
+}
+
+export async function viatorPriceInfo() {
+  const doc = await ViatorPrices.findOne({ name: 'current' }).select('fileName uploadedBy updatedAt rows').lean();
+  if (doc) return { uploaded: true, builtIn: false, fileName: doc.fileName, uploadedBy: doc.uploadedBy, updatedAt: doc.updatedAt, rows: doc.rows.length };
+  return { uploaded: true, builtIn: true, fileName: 'Built-in sheet (Viator portal prices, 28 Oct 2026)', rows: DEFAULT_PRICES.rows.length };
 }

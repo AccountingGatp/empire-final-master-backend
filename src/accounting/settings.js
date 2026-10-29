@@ -26,7 +26,22 @@ export const ACCOUNTS = {
   // Viator journal (SOP Part B)
   viatorClearing: '10032 Sales Clearing Account:Viator Sales',
   viatorRevenue: '40000.1 Sales:Sales Revenue - Viator',
+  // Viator commission (Empire Viator SOP section 4). Confirm the exact QBO name.
+  viatorCommission: '40002.3 Processing Fees - Others',
 };
+
+// ---- Viator supplier accounts (Empire Viator Sales, Commission & Deferred SOP) ----
+// Only these six accounts are shown and accepted. `id` is the Viator supplier
+// number found in the file names (VI0000005669845_..., bookings-report-5669845-...,
+// product codes 5669845P3). `location` must match a COMPANIES name (gives the QB class).
+export const VIATOR_ACCOUNTS = [
+  { id: '5669845', label: 'Chicago G&G', location: 'Chicago Gangsters and Ghosts Tours', currency: 'USD' },
+  { id: '5538', label: 'See It All', location: 'See It All Chicago Tours LLC', currency: 'USD' },
+  { id: '5669889', label: 'Tours of NYC', location: 'Tours of NYC', currency: 'USD' },
+  { id: '5669870', label: 'Washington DC', location: 'Washington DC Sightseeing Tours', currency: 'USD' },
+  { id: '5669891', label: 'Charleston', location: 'Charleston Tour Company', currency: 'USD' },
+  { id: '5669869', label: 'London', location: 'London Sightseeing Tours', currency: 'GBP' },
+];
 
 // ---- Source classification (Transactions sheet "Source" column) --------------
 // Lower-cased + trimmed Source value -> what to do with the row.
@@ -119,6 +134,12 @@ export const OPTIONS = {
   // in the XOLA journal (10032 Viator Sales) and use the advice only as a check.
   viatorInXola: false,
 
+  // Viator SOP section 5: Viator has its own deferred working (booking-date sales
+  // minus travel-date sales, from Viator's reports). The Xola deferred working
+  // therefore leaves out every row whose Source or Tags contains "Viator"
+  // (refund rows included). false = old behaviour, every Xola row counts.
+  viatorDeferredSeparate: true,
+
   // FX (Controller decision, Oct 2026): fill every empty rate automatically with
   // the ECB rate for that payout date (frankfurter.dev). Anyone can still open
   // step 3 and type a different rate (e.g. the banked Wise rate or an average).
@@ -134,6 +155,8 @@ export const NAMES = {
   office: 'OFFICE-{YYYY}-{MM}',
   deferred: 'DEF-{YYYY}-{MM}',
   viator: 'VIA-{YYYY}-{MM}',
+  viatorDef: 'DEFV-{YYYY}-{MM}',
+  viatorWork: 'VIATOR-WORKINGS-{YYYY}-{MM}',
   checks: 'CHECKS-{YYYY}-{MM}',
 };
 
@@ -168,6 +191,7 @@ export const TRANSACTION_HEADERS = {
   guestFee: 'Guest Fee',
   net: 'Net',
   source: 'Source',
+  tags: 'Tags', // optional: Viator rows can also be marked here (SOP section 5)
   method: 'Method',
   payoutDate: 'Payout Date',
   confirmationCode: 'Confirmation Code',

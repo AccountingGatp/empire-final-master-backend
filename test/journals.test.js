@@ -11,6 +11,7 @@ import XLSX from 'xlsx';
 import { OPTIONS as SOP_OPTIONS } from '../src/accounting/settings.js';
 // These tests cover the SOP Part B behaviour (Viator from the advice only).
 SOP_OPTIONS.viatorInXola = false;
+SOP_OPTIONS.viatorDeferredSeparate = false;
 
 const parse = (buf) => {
   const wb = readWorkbook(buf);

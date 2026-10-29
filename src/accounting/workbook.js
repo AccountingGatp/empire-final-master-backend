@@ -37,6 +37,10 @@ function locateHeaders(rows, wanted) {
   return best;
 }
 
+// A row belongs to Viator when its Source OR its Tags mention Viator (any case).
+// Source alone misses Viator refund rows (Viator SOP section 5).
+export const isViatorRow = (source, tags) => /viator/i.test(`${source ?? ''} ${tags ?? ''}`);
+
 const REQUIRED_TRANSACTION_HEADERS = ['Currency', 'Gross', 'Processing Fee', 'Service Fee', 'Guest Fee', 'Net', 'Source', 'Payout Date'];
 
 // Xola's Recognized Earnings export has its own Transactions layout (confirmed
@@ -59,6 +63,7 @@ const RECOGNIZED_HEADERS = {
   collProc: 'Collected In Period - Processing Fee',
   collSvc: 'Collected In Period - Service Fee',
   source: 'Source',
+  tags: 'Tags',
   method: 'Method',
   confirmationCode: 'Confirmation Code',
 };
@@ -96,6 +101,8 @@ function parseRecognizedRows(rows) {
       guestFee: 0,
       net,
       source: String(get('source') ?? '').trim().toLowerCase(),
+      tags: String(get('tags') ?? '').trim(),
+      viator: isViatorRow(get('source'), get('tags')),
       method: String(get('method') ?? '').trim(),
       payoutDate: '', // not in this report
       payoutDateRaw: '',
@@ -152,6 +159,8 @@ export function parseTransactions(wb) {
       guestFee: toCents(get('guestFee')),
       net: toCents(get('net')),
       source: String(get('source') ?? '').trim().toLowerCase(),
+      tags: String(get('tags') ?? '').trim(),
+      viator: isViatorRow(get('source'), get('tags')),
       method: String(get('method') ?? '').trim(),
       payoutDate: normDate(get('payoutDate')),
       payoutDateRaw: String(get('payoutDate') ?? '').trim(),
