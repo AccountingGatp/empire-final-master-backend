@@ -95,6 +95,7 @@ const BOOKING_COLS = {
   productCode: ['productcode'],
   productName: ['productname'],
   tourGrade: ['tourgradecode'],
+  tourGradeTitle: ['tourgradetitle'],
   source: ['bookingsource'],
 };
 
@@ -143,6 +144,7 @@ export function parseBookingsCsv(buffer, fileName = 'bookings.csv') {
       productCode: String(g('productCode')).trim(),
       productName: String(g('productName')).trim(),
       tourGrade: String(g('tourGrade')).trim(),
+      tourGradeTitle: String(g('tourGradeTitle')).trim(),
       source: String(g('source')).trim(),
     });
   }
@@ -234,134 +236,192 @@ function parseDMonYY(v) {
   return `${y}-${String(mi + 1).padStart(2, '0')}-${m[1].padStart(2, '0')}`;
 }
 
-// ---- Product commission sheet (prices) ------------------------------------------------
+// ---- Viator Product Commission List (prices) ---------------------------------------------
+// One workbook, one tab per location (Charleston, Washington DC, NYC, See It All, Chicago,
+// London), one row per tour / option code / price type / schedule / group size.
+
+const TAB_ACCOUNT = [
+  [/see\s*it\s*all|sia/i, '5538'],
+  [/charleston/i, '5669891'],
+  [/washington|dc/i, '5669870'],
+  [/nyc|new\s*york/i, '5669889'],
+  [/chicago/i, '5669845'],
+  [/london/i, '5669869'],
+];
+const accountForTab = (name) => TAB_ACCOUNT.find(([re]) => re.test(String(name)))?.[1] || null;
 
 const PRICE_COLS = {
-  productCode: ['productcode', 'product', 'productid', 'code'],
-  tourGrade: ['tourgradecode', 'tourgrade', 'grade', 'option', 'tourgradeoption'],
-  adult: ['adult', 'adultprice', 'priceadult', 'viatorpriceadult', 'viatoradultprice'],
-  senior: ['senior', 'seniorprice', 'priceseniors', 'priceSenior'.toLowerCase(), 'viatorpricesenior', 'viatorseniorprice'],
-  youth: ['youth', 'youthprice', 'priceyouth', 'viatorpriceyouth', 'viatoryouthprice'],
-  child: ['child', 'childprice', 'pricechild', 'viatorpricechild', 'viatorchildprice'],
-  productName: ['productname', 'name', 'tour', 'tourname'],
-  groupAdult: ['groupsizepricesadult', 'groupadultprices', 'adultgroupprices', 'groupprices', 'privategroupprices', 'adultgroupsizeprices'],
-  groupSenior: ['groupsizepricessenior', 'groupseniorprices', 'seniorgroupprices', 'seniorgroupsizeprices'],
-  booking: ['perbooking', 'perbookingvehicle', 'bookingprice', 'pricebooking', 'pricepervehicle', 'vehicleprice', 'privateprice'],
-  commission: ['commission', 'commissionpct', 'commissionpercent', 'listedcommission', 'commissionrate', 'rate'],
-  effective: ['effectivedate', 'effective', 'from', 'validfrom', 'startdate'],
+  tour: ['tour'],
+  option: ['option'],
+  tg: ['optioncode', 'tourgradecode'],
+  start: ['startdate'],
+  end: ['enddate'],
+  days: ['days'],
+  type: ['pricetype'],
+  group: ['groupsizetravelers', 'groupsize'],
+  price: ['retailprice', 'price'],
+  commission: ['commissionrate', 'commission'],
 };
+const PRICE_TYPES = new Set(['adult', 'senior', 'youth', 'child', 'infant', 'vehicle']);
+const DAYS = ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat'];
+const normTour = (s) => key(s);
 
-// Reads the product commission sheet exported as CSV / XLSX. The header row is
-// found by looking for a product-code column plus at least one price column.
-export function parsePriceSheet(buffer, fileName = 'prices.csv') {
-  const rows = sheetRows(buffer, fileName);
-  let h = -1;
-  let cols = {};
-  for (let i = 0; i < Math.min(rows.length, 30); i++) {
-    const c = mapColumns(rows[i] || [], PRICE_COLS);
-    if (c.productCode !== undefined && ['adult', 'senior', 'youth', 'child', 'booking', 'groupAdult'].some((f) => c[f] !== undefined)) {
-      h = i;
-      cols = c;
-      break;
-    }
-  }
-  if (h === -1) throw new Error('could not find the price columns — the sheet needs a product code column and adult / senior / youth / child price columns');
-  const price = (v) => {
-    const n = toNum(v);
-    return n === null || String(v).trim() === '' ? null : Math.round(n * 100);
-  };
-  // "1:399.00|2:249.00|3:199.00" -> [39900, 24900, 19900] (index = group size − 1)
-  const tierList = (v) => {
-    const out = [];
-    for (const part of String(v ?? '').split(/[|;,]/)) {
-      const m = /^\s*(\d+)\s*[:=]\s*([\d.]+)/.exec(part);
-      if (m) out[Number(m[1]) - 1] = Math.round(Number(m[2]) * 100);
-    }
-    for (let i = 0; i < out.length; i++) if (out[i] === undefined) out[i] = out[i - 1] ?? 0;
-    return out.length ? out : null;
-  };
+export function parsePriceSheet(buffer, fileName = 'prices.xlsx') {
+  const wb = XLSX.read(buffer, { type: 'buffer', cellDates: false });
   const out = [];
-  for (const r of rows.slice(h + 1)) {
-    const productCode = String(r[cols.productCode] ?? '').trim();
-    if (!productCode) continue;
-    const g = (f) => (cols[f] === undefined ? '' : r[cols[f]]);
-    let commission = toNum(g('commission'));
-    if (commission !== null && commission > 1) commission /= 100; // 40 -> 0.40
-    out.push({
-      productCode,
-      tourGrade: String(g('tourGrade') || '').trim(),
-      adult: price(g('adult')),
-      senior: price(g('senior')),
-      youth: price(g('youth')),
-      child: price(g('child')),
-      booking: price(g('booking')),
-      productName: String(g('productName') || '').trim(),
-      tiers: tierList(g('groupAdult')) ? { adult: tierList(g('groupAdult')), senior: tierList(g('groupSenior')) } : null,
-      commission,
-      effective: normDate(g('effective')),
-    });
+  const skippedTabs = [];
+  for (const name of wb.SheetNames) {
+    const account = accountForTab(name);
+    const rows = XLSX.utils.sheet_to_json(wb.Sheets[name], { header: 1, blankrows: false, raw: true, defval: '' });
+    let h = -1;
+    let cols = {};
+    for (let i = 0; i < Math.min(rows.length, 30); i++) {
+      const c = mapColumns(rows[i] || [], PRICE_COLS);
+      if (c.tour !== undefined && c.tg !== undefined && c.price !== undefined && c.type !== undefined) {
+        h = i;
+        cols = c;
+        break;
+      }
+    }
+    if (h === -1) continue;
+    if (!account) {
+      skippedTabs.push(name);
+      continue;
+    }
+    for (const r of rows.slice(h + 1)) {
+      const g = (f) => (cols[f] === undefined ? '' : r[cols[f]]);
+      const tour = String(g('tour')).trim();
+      const tg = String(g('tg')).trim().toUpperCase();
+      const type = String(g('type')).trim().toLowerCase();
+      const cents = toCentsStrict(g('price'));
+      if (!tour || !tg || !PRICE_TYPES.has(type) || cents === null) continue; // "No prices added" etc. = no price
+      const grp = /^(\d+)(?:\s*-\s*(\d+))?$/.exec(String(g('group')).trim());
+      let commission = toNum(g('commission'));
+      if (commission !== null && commission > 1) commission /= 100;
+      out.push({
+        account,
+        tour,
+        option: String(g('option')).trim(),
+        tg,
+        start: normDate(g('start')) || '',
+        end: /no end/i.test(String(g('end'))) ? '' : normDate(g('end')) || '',
+        days: String(g('days'))
+          .split(/[,\s]+/)
+          .map((d) => d.slice(0, 3).toLowerCase())
+          .filter((d) => DAYS.includes(d)),
+        type,
+        gmin: grp ? Number(grp[1]) : null,
+        gmax: grp ? Number(grp[2] ?? grp[1]) : null,
+        cents,
+        commission,
+      });
+    }
   }
-  if (!out.length) throw new Error('the price sheet has no product rows');
-  return { rows: out };
+  if (!out.length) {
+    throw new Error('could not read the price list — it needs one tab per location with the columns Tour, Option code, Price type, Group size (travelers), Retail price, Commission rate, Start date, End date');
+  }
+  return { rows: out, skippedTabs };
 }
 
-const stripAccount = (code) => String(code).replace(/^\d+(?=P|MINI|[A-Z])/i, '');
-const gradeBase = (g) => String(g || '').split('~')[0].trim().toLowerCase();
+const optionTitle = (t) => normTour(String(t || '').replace(/\s*\d{1,2}:\d{2}\s*$/, ''));
+const weekday = (d) => DAYS[new Date(`${d}T12:00:00Z`).getUTCDay()];
+const covers = (r, d) => (!r.start || r.start <= d) && (!r.end || d <= r.end);
 
-// Returns a lookup(booking) -> price row | null. Product code + tour grade; the
-// latest row whose effective date is on or before the booking date wins.
+/**
+ * lookup(booking, accountId, codeMap) -> { tour, tg, rows, commission, fallback } | null
+ *   Tour:  the report's Product Name = the list's Tour; otherwise the Product Code
+ *          (same code = same tour); otherwise the report's option title.
+ *   Rows:  Option code = Tour Grade Code (before "~"), dates cover the booking date.
+ *   When no row covers the booking date (old tour grade) the nearest period is used (fallback).
+ */
 export function makePriceLookup(rows = []) {
-  const index = new Map();
+  const byAcc = new Map();
   for (const r of rows) {
-    for (const pc of new Set([key(r.productCode), key(stripAccount(r.productCode))])) {
-      for (const g of new Set([key(r.tourGrade), key(gradeBase(r.tourGrade)), ''])) {
-        const k = `${pc}|${g}`;
-        if (!index.has(k)) index.set(k, []);
-        index.get(k).push(r);
-      }
-    }
+    if (!byAcc.has(r.account)) byAcc.set(r.account, []);
+    byAcc.get(r.account).push(r);
   }
-  return (b) => {
-    const pcs = [key(b.productCode), key(stripAccount(b.productCode))];
-    const gs = [key(b.tourGrade), key(gradeBase(b.tourGrade)), ''];
-    for (const pc of pcs) {
-      for (const g of gs) {
-        const list = index.get(`${pc}|${g}`);
-        if (!list) continue;
-        const ok = list.filter((r) => !r.effective || r.effective <= b.bookingDate);
-        const pool = ok.length ? ok : list;
-        return pool.reduce((a, c) => ((c.effective || '') >= (a.effective || '') ? c : a));
-      }
+  const tourOf = (acc, name) => (byAcc.get(acc) || []).find((r) => normTour(r.tour) === normTour(name))?.tour || null;
+
+  // Product Code -> list tour, learnt from the bookings whose name matches a tour exactly.
+  const codeMapFor = (acc, bookings) => {
+    const votes = new Map();
+    for (const b of bookings) {
+      const t = tourOf(acc, b.productName);
+      if (!t) continue;
+      if (!votes.has(b.productCode)) votes.set(b.productCode, new Map());
+      const m = votes.get(b.productCode);
+      m.set(t, (m.get(t) || 0) + 1);
     }
-    return null;
+    return new Map([...votes].map(([code, m]) => [code, [...m].sort((a, b) => b[1] - a[1])[0][0]]));
   };
+
+  const lookup = (b, acc, codeMap = new Map()) => {
+    const list = byAcc.get(acc) || [];
+    const tg = String(b.tourGrade || '').split('~')[0].trim().toUpperCase();
+    let tour = tourOf(acc, b.productName) || codeMap.get(b.productCode) || null;
+    if (!tour && b.tourGradeTitle) {
+      const t = optionTitle(b.tourGradeTitle);
+      tour = list.find((r) => r.tg === tg && normTour(r.option) === t)?.tour || null;
+    }
+    if (!tour) return null;
+    const cand = list.filter((r) => r.tour === tour && r.tg === tg);
+    if (!cand.length) return null;
+
+    const d = b.bookingDate;
+    let cov = cand.filter((r) => covers(r, d));
+    let fallback = false;
+    if (!cov.length) {
+      fallback = true;
+      const days = (x) => Math.abs(new Date(`${x}T12:00:00Z`) - new Date(`${d}T12:00:00Z`));
+      const nearest = cand.reduce((a, c) => (days(c.start || d) < days(a.start || d) ? c : a));
+      cov = cand.filter((r) => r.start === nearest.start && r.end === nearest.end);
+    }
+    // Several schedules (days of the week) with prices: the one that includes the travel day.
+    const schedules = [...new Set(cov.map((r) => r.days.join(',')))];
+    if (schedules.length > 1) {
+      const wd = weekday(b.travelDate);
+      const pick = schedules.find((sc) => sc.split(',').includes(wd)) || schedules[0];
+      cov = cov.filter((r) => r.days.join(',') === pick);
+    }
+    const commission = cov.find((r) => r.commission !== null && r.commission !== undefined)?.commission ?? null;
+    return { tour, tg, rows: cov, commission, fallback };
+  };
+  lookup.codeMapFor = codeMapFor;
+  return lookup;
 }
 
-// Viator Gross = adults × adult + seniors × senior + youths × youth + children × child
-// (infants free); a private per-vehicle product is priced per booking (SOP section 2).
-export function grossFor(b, row) {
-  if (!row) return { cents: null, reason: 'product / tour grade not in the price sheet' };
-  // Private / group-size pricing: every guest pays the price listed for the size of the party.
-  if (row.tiers?.adult?.length) {
-    const size = (b.adults || 0) + (b.seniors || 0) + (b.youths || 0) + (b.children || 0);
-    const at = (list) => list[Math.min(Math.max(size, 1), list.length) - 1];
-    const cents = ((b.adults || 0) + (b.youths || 0) + (b.children || 0)) * at(row.tiers.adult) + (b.seniors || 0) * at(row.tiers.senior || row.tiers.adult);
-    return size > row.tiers.adult.length ? { cents, reason: `party of ${size} is bigger than the largest listed group size (${row.tiers.adult.length}) — priced at that tier` } : { cents };
-  }
-  if (row.booking !== null && row.booking !== undefined && row.adult === null) return { cents: row.booking, perBooking: true };
-  const need = [
-    ['adults', 'adult'],
-    ['seniors', 'senior'],
-    ['youths', 'youth'],
-    ['children', 'child'],
-  ];
+// Viator Gross = Σ guests of a type × Retail price of that type (infants free); Group size
+// rows (private tiers) are picked by the booking's total guests; a Vehicle price is per
+// booking. A guest type with no price row has no price (0) — SOP section 2.
+export function grossFor(b, quote) {
+  if (!quote) return { cents: null, reason: 'tour / option code not in the Viator Product Commission List' };
+  const rows = quote.rows;
+  const veh = rows.find((r) => r.type === 'vehicle');
+  if (veh) return { cents: veh.cents, perBooking: true, fallback: quote.fallback };
+  const size = (b.adults || 0) + (b.seniors || 0) + (b.youths || 0) + (b.children || 0) + (b.infants || 0);
   let total = 0;
-  for (const [count, p] of need) {
-    if (!b[count]) continue;
-    if (row[p] === null || row[p] === undefined) return { cents: null, reason: `no ${p} price in the price sheet for ${b.productCode} ${b.tourGrade}` };
-    total += b[count] * row[p];
+  let reason = null;
+  for (const [count, type] of [
+    [b.adults, 'adult'],
+    [b.seniors, 'senior'],
+    [b.youths, 'youth'],
+    [b.children, 'child'],
+  ]) {
+    if (!count) continue;
+    const ofType = rows.filter((r) => r.type === type);
+    let row = ofType.find((r) => r.gmin === null || (size >= r.gmin && size <= r.gmax));
+    if (!row) {
+      const tiered = ofType.filter((r) => r.gmin !== null);
+      if (tiered.length) {
+        row = tiered.reduce((a, c) => (c.gmax > a.gmax ? c : a));
+        reason = `party of ${size} is bigger than the largest listed group size (${row.gmax}) — priced at that tier`;
+      }
+    }
+    if (row) total += count * row.cents;
   }
-  return { cents: total };
+  const guests = (b.adults || 0) + (b.seniors || 0) + (b.youths || 0) + (b.children || 0);
+  if (guests > 0 && total === 0) return { cents: null, reason: `no price in the list for these guests (${b.productCode} ${b.tourGrade})` };
+  return { cents: total, reason, fallback: quote.fallback };
 }
 
 // ---- Per booking: status + payout rules (SOP section 2) --------------------------------
@@ -403,12 +463,16 @@ export function applyRules(b, paid, grossCents) {
       if (reportNet > 0 && paidCents > reportNet) flags.push(`paid ${paidCents / 100} is more than the report net ${reportNet / 100}`);
     }
   } else if (DEAD.has(b.status)) {
-    if (!hasPayout || paidCents === 0) {
-      rule = 'Cancelled/Rejected, not paid';
-    } else {
+    if (hasPayout && paidCents > 0) {
       rule = 'Cancelled, but Viator paid it';
       sales = grossCents;
       net = paidCents;
+    } else if (!hasPayout && reportNet > 0) {
+      rule = 'Cancelled, Net Price above 0 and not yet paid out';
+      sales = grossCents;
+      net = reportNet;
+    } else {
+      rule = 'Cancelled/Rejected, Net Price 0 or reversed, not paid';
     }
   } else {
     rule = `Unknown status "${b.status}" — treated like Confirmed`;
@@ -518,11 +582,12 @@ export function buildViatorSop({ month, accounts, prices, rates = [], options = 
     let unpricedNet = 0;
     let anomalies = 0;
     let priceOff = 0;
+    const codeMap = lookup.codeMapFor(def.id, [...byRef.values()]);
     for (const b of [...byRef.values()].sort((x, y) => x.bookingDate.localeCompare(y.bookingDate) || x.ref.localeCompare(y.ref))) {
-      const row = lookup(b);
+      const row = lookup(b, def.id, codeMap);
       const g = grossFor(b, row);
       const r = applyRules(b, paidBy.get(b.refNum), g.cents);
-      const out = { location: name, ...b, ...r, reportNetCents: b.netCents, listedCommission: row?.commission ?? null, priceReason: g.reason || null };
+      const out = { location: name, ...b, ...r, reportNetCents: b.netCents, listedCommission: row?.commission ?? null, priceReason: g.reason || (g.fallback ? 'no price row covers the booking date — nearest period used' : null) };
       if (r.salesCents === null) {
         // No price: left out of Sales / Net / Commission until the sheet has it (check VS2).
         unpriced++;

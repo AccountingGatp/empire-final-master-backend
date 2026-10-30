@@ -820,5 +820,5 @@ export async function saveViatorPrices({ fileName, buffer }, user) {
 export async function viatorPriceInfo() {
   const doc = await ViatorPrices.findOne({ name: 'current' }).select('fileName uploadedBy updatedAt rows').lean();
   if (doc) return { uploaded: true, builtIn: false, fileName: doc.fileName, uploadedBy: doc.uploadedBy, updatedAt: doc.updatedAt, rows: doc.rows.length };
-  return { uploaded: true, builtIn: true, fileName: 'Built-in sheet (Viator portal prices, 28 Oct 2026)', rows: DEFAULT_PRICES.rows.length };
+  return { uploaded: true, builtIn: true, fileName: 'Built-in Viator Product Commission List (30 Oct 2026)', rows: DEFAULT_PRICES.rows.length };
 }

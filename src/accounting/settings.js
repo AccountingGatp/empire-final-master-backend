@@ -27,7 +27,7 @@ export const ACCOUNTS = {
   viatorClearing: '10032 Sales Clearing Account:Viator Sales',
   viatorRevenue: '40000.1 Sales:Sales Revenue - Viator',
   // Viator commission (Empire Viator SOP section 4). Confirm the exact QBO name.
-  viatorCommission: '40002.3 Processing Fees - Others',
+  viatorCommission: '40002.3 Sales Revenue - Xola:Processing Fees:Processing Fees - Viator',
 };
 
 // ---- Viator supplier accounts (Empire Viator Sales, Commission & Deferred SOP) ----
